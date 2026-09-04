@@ -283,7 +283,7 @@ api/
     └── webhooks.py    # Alertmanager 接收（内网，不走 JWT）
 ```
 
-SSE 端点 `GET /api/v1/faults/{id}/stream`：订阅 Redis channel `sse:fault:{id}`，推送事件类型 `status_changed / agent_step / log`。前端诊断页只依赖这条流。
+SSE 端点 `GET /api/v1/faults/{id}/stream`：订阅 Redis channel `sse:fault:{id}`，推送事件类型 `snapshot / status_changed / agent_step / verification_progress`（payload 契约见 design.md §4）。前端诊断页只依赖这条流。
 
 ### 6.2 monitoring/ — 多源采集
 
@@ -587,7 +587,7 @@ LLM 提议 → 参数白名单校验 → risk_control.decide() → (人工确认
 | POST | /api/v1/webhooks/alerts | Alertmanager 接收（内网） |
 | GET | /health | 存活探针（CI/CD 健康检查用） |
 
-SSE 事件类型：`status_changed`（状态机迁移）、`agent_step`（工具调用开始/结束+证据摘要）、`verification_progress`（验证采样点）。
+SSE 事件类型（完整 payload 契约见 design.md §4）：`snapshot`（连接/重连时的状态与最近步骤快照）、`status_changed`（状态机迁移）、`agent_step`（工具调用开始/结束+证据摘要）、`verification_progress`（验证采样点）。
 
 ---
 
