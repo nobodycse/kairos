@@ -1,0 +1,13 @@
+# Docker build context 过滤（context = 仓库根，见 deploy/compose/*.yml）
+# 只保留 backend/、frontend/、demo-app/、deploy/docker/nginx.conf
+*
+!backend
+!frontend
+!demo-app
+!deploy/docker/nginx.conf
+**/__pycache__
+**/*.pyc
+**/.venv
+**/node_modules
+**/dist
+**/.env

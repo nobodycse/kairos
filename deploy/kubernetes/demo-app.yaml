@@ -1,0 +1,66 @@
+# demo-app 部署清单（design.md §6）
+# - namespace demo + Deployment payment-service（replicas 2，requests 128Mi / limits 512Mi）
+# - 标签 kairos.io/managed=true 是风险白名单的前置条件（architecture.md §11.1）
+# - NodePort 30780：Prometheus 经 host.docker.internal:30780 抓 /metrics
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: demo
+  labels:
+    app: payment-service
+    kairos.io/managed: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+        kairos.io/managed: "true"
+    spec:
+      containers:
+        - name: app
+          # k3s 以 --docker 作为运行时（setup_server.sh），宿主机 docker build
+          # 出的 kairos/demo-app 镜像对集群直接可见，无需 registry
+          image: kairos/demo-app:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: demo
+spec:
+  type: NodePort
+  selector:
+    app: payment-service
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30780

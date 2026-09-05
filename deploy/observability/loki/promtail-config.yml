@@ -1,0 +1,35 @@
+# promtail 配置（以 DaemonSet 跑在 k3s 内，读 /var/log/pods，架构见 architecture.md §9）
+# 注意：promtail Pod 使用 hostNetwork（见 deploy/kubernetes/promtail.yaml），
+# Loki 在宿主机 docker、端口绑 127.0.0.1:3100，因此直接推回环地址
+# 本文件是唯一来源：setup_server.sh 用它生成 k8s ConfigMap，勿在 manifest 里复写
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://127.0.0.1:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      # 只采集 Running/Pending 阶段的 Pod
+      - source_labels: [__meta_kubernetes_pod_phase]
+        action: keep
+        regex: Running|Pending
+      # 打上 namespace / pod / container / app 标签（Agent 查日志的 LogQL 依赖它们：
+      # {namespace="demo", pod=~"payment-.*"} |= "ERROR"）
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        target_label: container
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+    pipeline_stages:
+      # k8s 容器日志为 CRI 格式
+      - cri: {}

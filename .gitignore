@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node / 前端构建
+node_modules/
+dist/
+*.local
+
+# 环境与密钥（凭据只走 .env，不入库）
+.env
+*.env
+!.env.example
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 本地运行数据
+*.log
+
+# 工具本地产物
+.mimosa/

@@ -124,6 +124,9 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph SERVER["云服务器 4C8G"]
+        WH["webhook_server.py<br/>systemd 常驻 :9000"]
+        DEPLOY["deploy.sh"]
+
         subgraph K3S["k3s 单节点集群（被监控目标）"]
             DEMO["demo 微服务<br/>namespace: demo"]
             NE["node-exporter"]
@@ -134,7 +137,6 @@ flowchart TB
         subgraph COMPOSE_APP["docker-compose.yml（平台层）"]
             NGINX["frontend<br/>nginx :80"]
             BE["backend<br/>FastAPI :8000"]
-            WH["webhook<br/>:9000"]
             PGR["postgres :5432"]
             RDS["redis :6379"]
         end
@@ -151,7 +153,7 @@ flowchart TB
     NGINX -->|"/api"| BE
     NGINX -->|"/grafana"| GRAF2
     GITEE["Gitee webhook"] -->|"9000 + 签名校验"| WH
-    WH --> DEPLOY["deploy.sh"]
+    WH --> DEPLOY
     BE -->|"挂载 k3s.yaml"| K3S
     PROM2 -->|"抓取"| K3S
     PT -->|"容器日志"| LOKI2
@@ -160,6 +162,7 @@ flowchart TB
 
 要点：
 
+- **webhook 常驻方式**：`webhook_server.py` 以 systemd（`kairos-webhook.service`）常驻宿主机，**不在平台层 compose 内**——deploy.sh `up -d` 重启平台层期间 webhook 自身不受影响；密钥经 `EnvironmentFile` 读 `deploy/compose/.env`，日志走 journald。
 - **网络边界**：公网只开 `22 / 80 / 9000`（9000 建议在云安全组限制 Gitee 来源 IP）。Prometheus、Loki、PostgreSQL、Redis、backend 全部只在 compose 内网/本机，需要看 Grafana 走 nginx 反代，需要查监控数据走 SSH 隧道。
 - **backend 连集群**：backend 跑在 compose（集群外），部署时挂载宿主机 `/etc/rancher/k3s/k3s.yaml` 到容器并设置 `KUBECONFIG`，启动脚本把其中 `server: https://127.0.0.1:6443` 改写为 `https://<宿主机内网IP>:6443`（容器内 127.0.0.1 不通）。
 - **双 compose 拆分**：平台层与可观测栈独立启停互不牵连；低配机器（2C4G 降级）可以只跑平台层，监控栈最小化。
@@ -613,6 +616,7 @@ KAIROS/
 │   ├── core/                 # config(.env) / security(JWT)
 │   ├── main.py
 │   └── requirements.txt
+├── demo-app/                # 被监控的示例微服务（design.md §6 契约）
 ├── frontend/
 │   └── src/
 │       ├── views/            # login / dashboard / resources / lab / diagnosis / history
@@ -627,7 +631,7 @@ KAIROS/
 │   └── kubernetes/           # demo-app manifests, exporters 安装清单
 ├── fault-lab/                # 故障注入 manifests / 脚本（§10）
 │   ├── cpu/  ├── memory/  ├── network/  └── pod/
-├── scripts/                  # setup_server.sh / deploy.sh / webhook_server.py
+├── scripts/                  # setup_server.sh / deploy.sh / webhook_server.py / kairos-webhook.service
 ├── experiments/              # 测试集与结果数据
 ├── docs/
 │   ├── architecture.md       # 本文

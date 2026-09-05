@@ -1,0 +1,14 @@
+# Grafana 看板 provider
+# 看板 JSON（被监控集群 / KAIROS 自身两组）由前端先行任务补齐（design.md §8.2），
+# 放入 deploy/observability/grafana/dashboards/ 即自动加载
+apiVersion: 1
+
+providers:
+  - name: kairos
+    folder: KAIROS
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,71 @@
+# 平台层 compose：frontend / backend / postgres / redis
+# webhook_server.py 走宿主机 systemd（kairos-webhook.service），不在本 compose——
+# deploy.sh up -d 重启平台层期间 webhook 自身不受影响
+# 监控栈见 docker-compose.monitor.yml，两者独立启停（architecture.md §3）
+name: kairos
+
+networks:
+  kairos-net:
+    external: true    # setup_server.sh 预先创建：docker network create kairos-net
+
+services:
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    image: kairos/frontend:${TAG:-latest}
+    # 前端脚手架就位前不参与默认构建/启动（frontend/ 为空时 build 必失败）
+    # deploy.sh 检测到 frontend/package.json 后自动追加 --profile frontend
+    profiles: ["frontend"]
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: kairos/backend:${TAG:-latest}
+    # 仅绑宿主机回环：公网不暴露，deploy.sh 健康检查直连
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      # 密码统一走 POSTGRES_PASSWORD，覆盖 .env 中 DATABASE_URL 的示例密码
+      DATABASE_URL: postgresql+asyncpg://kairos:${POSTGRES_PASSWORD}@postgres:5432/kairos
+    volumes:
+      # 改写过 server 地址的 k3s kubeconfig（architecture.md §3）
+      - /opt/kairos/kubeconfig/k3s.yaml:/kubeconfig/k3s.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kairos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: kairos
+    volumes:
+      - /opt/kairos/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kairos"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - /opt/kairos/data/redis:/data
+    restart: unless-stopped
+    networks: [kairos-net]

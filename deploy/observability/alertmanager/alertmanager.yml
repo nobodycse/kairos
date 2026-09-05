@@ -1,0 +1,16 @@
+# Alertmanager 路由（architecture.md §4.2 原文）
+# group_wait 10s：聚合抖动内的重复告警；webhook 推给平台层 backend
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: kairos-backend
+  group_by: [alertname, namespace, pod]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 30m
+
+receivers:
+  - name: kairos-backend
+    webhook_configs:
+      - url: http://backend:8000/api/v1/webhooks/alerts

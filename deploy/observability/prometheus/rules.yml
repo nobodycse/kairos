@@ -1,0 +1,65 @@
+# KAIROS 告警规则（architecture.md §4.1，共 7 条）
+# PromQL 与文档保持一致；标注 VERIFY 的规则在 Phase 1 联调时按实际指标名验证——
+# 特别是跨数据源 join：ContainerMemoryHigh / ContainerCPUHigh 的分子来自 cAdvisor、
+# 分母来自 kube-state-metrics，两侧 label 不完全相同，可能需要补
+# on(namespace, pod, container) 对齐（文档已注明"表达式以实际指标名为准"）。
+groups:
+  - name: kairos-alerts
+    rules:
+      - alert: PodCrashLooping
+        expr: increase(kube_pod_container_status_restarts_total[10m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} 10 分钟内重启超过 3 次"
+
+      - alert: PodOOMKilled
+        expr: increase(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} 容器被 OOMKilled"
+
+      # VERIFY: 跨 cAdvisor / kube-state-metrics 两个 job 的指标相除，需验证 join
+      - alert: ContainerMemoryHigh
+        expr: container_memory_working_set_bytes / kube_pod_container_resource_limits{resource="memory"} > 0.95
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} 内存使用率持续超过 95%"
+
+      # VERIFY: 同上
+      - alert: ContainerCPUHigh
+        expr: rate(container_cpu_usage_seconds_total[5m]) / kube_pod_container_resource_limits{resource="cpu"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} CPU 使用率持续超过 90%"
+
+      - alert: HTTPErrorRateHigh
+        expr: sum(rate(demo_http_requests_total{status=~"5.."}[5m])) / sum(rate(demo_http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo 应用 5xx 错误率超过 5%"
+
+      - alert: HTTPLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le)(rate(demo_http_request_duration_seconds_bucket[5m]))) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo 应用 P95 延迟超过 2s"
+
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "节点 {{ $labels.node }} NotReady"

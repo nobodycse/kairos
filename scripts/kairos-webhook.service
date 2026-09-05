@@ -1,0 +1,17 @@
+[Unit]
+Description=KAIROS Gitee WebHook receiver (deploy trigger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/kairos/repo/scripts/webhook_server.py
+# '-' 前缀：.env 缺失不阻塞启动（WEBHOOK_SECRET 未配置时拒绝所有请求）
+EnvironmentFile=-/opt/kairos/repo/deploy/compose/.env
+Restart=always
+RestartSec=5
+# 需要执行 deploy.sh（内含 docker compose），保持 root
+User=root
+
+[Install]
+WantedBy=multi-user.target
