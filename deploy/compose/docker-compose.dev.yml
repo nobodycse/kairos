@@ -1,0 +1,102 @@
+# 本地联调监控栈（仅开发机，Windows + Docker Desktop），与服务器流程零交集
+#
+# 自包含、不做 base+override 合并：compose 对 volumes 列表是追加合并，
+# 无法覆盖掉 docker-compose.monitor.yml 里的 /opt/kairos 服务器挂载。
+# 复用的现网配置一字不改：alertmanager.yml（webhook → backend:8000）、
+# rules.yml、loki-config.yml、Grafana provisioning + dashboards，
+# 因此本地验证的看板渲染 / 告警链路结果可直接平移到服务器栈。
+#
+# 用法（deploy/compose/ 下）：
+#   docker network create kairos-net
+#   docker compose -f docker-compose.dev.yml up -d --build
+#   验证完：docker compose -f docker-compose.dev.yml down -v
+# Grafana admin 密码从 deploy/compose/.env 的 GRAFANA_ADMIN_PASSWORD 读取
+# （.env 不入库，凭据一律走环境变量）。
+#
+# 与 docker-compose.monitor.yml 的差异：
+#   - 镜像优先官方源，拉取失败可改用 docker.m.daocloud.io 前缀
+#   - prometheus 挂 prometheus-dev.yml（仅 demo-app job）+ rules.yml，
+#     不挂 /opt/kairos/kubeconfig/prometheus-token（服务器专用）
+#   - 多一个 demo-app 服务，端口映射 30780:8000 复刻 NodePort
+#   - 少 postgres/redis：backend 为 Phase 0 stub，不连库
+#   - grafana 不设 SERVE_FROM_SUB_PATH：本地直连 127.0.0.1:3000，不走 /grafana
+#   - loki 本地无 promtail，日志面板留空属预期
+name: kairos-dev
+
+networks:
+  kairos-net:
+    external: true    # 本地 docker network create kairos-net
+
+services:
+  demo-app:
+    build:
+      # Dockerfile 以 demo-app/ 为上下文（COPY requirements.txt / app.py）
+      context: ../../demo-app
+      dockerfile: Dockerfile
+    image: kairos/demo-app:dev
+    # 30780 复刻 k3s NodePort：prometheus-dev.yml 的 host.docker.internal:30780
+    # 抓取目标与服务器一字不差
+    ports:
+      - "127.0.0.1:30780:8000"
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ../observability/prometheus/prometheus-dev.yml:/etc/prometheus/prometheus.yml:ro
+      # 告警规则与服务器共用同一份（HTTPErrorRateHigh 等在本地面板可验证）
+      - ../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    extra_hosts:
+      # 抓取目标用 host.docker.internal 指向宿主机（同 monitor 栈）
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: kairos/backend:dev
+    # 服务名必须叫 backend：alertmanager.yml 的 webhook URL 写死 http://backend:8000/...
+    # 不映射宿主机端口，dev 栈内仅 Alertmanager 经 kairos-net 推送 webhook
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?请在 deploy/compose/.env 中配置 GRAFANA_ADMIN_PASSWORD}
+      # 本地直连 http://127.0.0.1:3000，不设 ROOT_URL / SERVE_FROM_SUB_PATH
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    networks: [kairos-net]
+
+  loki:
+    image: grafana/loki:3.1.0
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ../observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+    ports:
+      - "127.0.0.1:3100:3100"
+    restart: unless-stopped
+    networks: [kairos-net]

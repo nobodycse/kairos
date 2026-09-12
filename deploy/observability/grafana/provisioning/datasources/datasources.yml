@@ -5,6 +5,9 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
+    # 显式 uid：看板 JSON 以 uid 引用数据源（Grafana 11 provisioning 下仅按
+    # name 引用解析不稳定），固定值保证看板在本地栈与服务器栈行为一致
+    uid: prometheus
     url: http://prometheus:9090
     isDefault: true
     editable: false
@@ -12,5 +15,6 @@ datasources:
   - name: Loki
     type: loki
     access: proxy
+    uid: loki
     url: http://loki:3100
     editable: false
