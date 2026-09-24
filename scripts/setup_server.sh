@@ -72,6 +72,9 @@ if grep -q '^K3S_SERVER_IP=10\.0\.0\.10$' "$COMPOSE_DIR/.env"; then
 fi
 # shellcheck disable=SC1091
 source "$COMPOSE_DIR/.env"
+# .env 里的 KUBECONFIG 是 backend 容器内路径（/kubeconfig/k3s.yaml），
+# source 会覆盖步骤 5 前面导出的本机路径，导致 kubectl 裸连 localhost:8080
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 : "${K3S_SERVER_IP:?请在 deploy/compose/.env 中填写 K3S_SERVER_IP}"
 if grep -q CHANGE_ME "$COMPOSE_DIR/.env"; then
   log "警告：.env 仍含 CHANGE_ME 占位值，部署前请务必修改"
