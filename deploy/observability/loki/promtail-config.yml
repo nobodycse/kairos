@@ -4,9 +4,9 @@
 # 本文件是唯一来源：setup_server.sh 用它生成 k8s ConfigMap，勿在 manifest 里复写
 #
 # 为什么用 static_configs 而不是 kubernetes_sd：实测 k3s 1.36 上 SD 建立连接后
-# 不产出目标（无错误、targets 恒 0）。文件路径即元数据——
-# /var/log/containers/*.log 是指向 /var/log/pods/<ns>_<pod>_<uid>/<container>/0.log
-# 的符号链接，从 __path__ 提取 namespace/pod/container，LogQL 契约不变：
+# 不产出目标（无错误、targets 恒 0）。元数据从 filename 标签提取——
+# /var/log/containers/<pod>_<namespace>_<container>-<id>.log（pod/namespace 名
+# 不含下划线，按下划线切分安全），LogQL 契约不变：
 # {namespace="demo", pod=~"payment-.*"} |= "ERROR"
 server:
   http_listen_port: 9080
@@ -27,14 +27,11 @@ scrape_configs:
     pipeline_stages:
       # k8s 容器日志为 CRI 格式（containerd：JSON 包装的 time/stream/log）
       - cri: {}
-    relabel_configs:
-      # /var/log/pods/<namespace>_<pod>_<uid>/<container>/0.log → 各元数据标签
-      - source_labels: [__path__]
-        regex: .*/pods/([^_]+)_[^_]+_[^/]+/.*
-        target_label: namespace
-      - source_labels: [__path__]
-        regex: .*/pods/[^_]+_([^_]+)_[^/]+/.*
-        target_label: pod
-      - source_labels: [__path__]
-        regex: .*/pods/[^/]+/([^/]+)/\d+\.log
-        target_label: container
+      # 从 filename 提取元数据（relabel 是 target 级拿不到逐行 filename）
+      - regex:
+          source: filename
+          expression: '^/var/log/containers/(?P<pod>[^_]+)_(?P<namespace>[^_]+)_(?P<container>.+)-[0-9a-f]{64}\.log$'
+      - labels:
+          namespace:
+          pod:
+          container:
