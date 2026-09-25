@@ -29,12 +29,13 @@ else
 fi
 systemctl enable --now docker
 
-# ---------- 2. k3s（--docker 运行时：宿主机 docker build 的 demo-app 镜像对集群直接可见）----------
+# ---------- 2. k3s（禁用 traefik 释放 80 端口给 nginx；运行时用内置 containerd，
+# 经 registries.yaml 配置国内镜像加速，见下方 registries 段）----------
 if ! command -v k3s >/dev/null; then
-  log "安装 k3s（--disable=traefik --docker）"
+  log "安装 k3s（--disable=traefik）"
   # k3s 官方只提供安装脚本通道：先下载到本地再执行，便于审计与重跑
   curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
-  INSTALL_K3S_EXEC="--disable=traefik --docker" sh /tmp/k3s-install.sh
+  INSTALL_K3S_EXEC="--disable=traefik" sh /tmp/k3s-install.sh
 else
   log "k3s 已安装：$(k3s --version | head -1)"
 fi

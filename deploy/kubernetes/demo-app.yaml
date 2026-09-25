@@ -28,8 +28,8 @@ spec:
     spec:
       containers:
         - name: app
-          # k3s 以 --docker 作为运行时（setup_server.sh），宿主机 docker build
-          # 出的 kairos/demo-app 镜像对集群直接可见，无需 registry
+          # k3s 运行时为内置 containerd（setup_server.sh 配 registries.yaml 镜像加速），
+          # 宿主机 docker build 出的镜像需经 docker save | k3s ctr images import 导入
           image: kairos/demo-app:latest
           imagePullPolicy: IfNotPresent
           ports:
