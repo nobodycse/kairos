@@ -33,6 +33,12 @@ log "构建镜像 tag=$NEW_TAG（当前运行：${OLD_TAG:-无}）"
 export TAG="$NEW_TAG"
 # compose v5 起 --profile 只作为全局旗标（子命令前），v2 两种位置均可
 compose "${PROFILE_ARGS[@]}" build
+
+# 数据库迁移在启动新版本前执行：compose run 自动等待 postgres healthcheck；
+# alembic 幂等，失败则 set -e 中止部署，旧版本继续在跑
+log "执行数据库迁移"
+compose run --rm backend alembic upgrade head
+
 compose "${PROFILE_ARGS[@]}" up -d
 
 # 健康检查：最多 30 次 x 4s = 120s

@@ -80,6 +80,7 @@ sudo bash scripts/setup_server.sh
 | `JWT_SECRET` | 随机 32+ 字符，`openssl rand -hex 32` |
 | `GRAFANA_ADMIN_PASSWORD` | 你自己的 Grafana 密码 |
 | `WEBHOOK_SECRET` | 随机串——**下一步 Gitee 要填同一个值** |
+| `ADMIN_INITIAL_PASSWORD` | 初始 admin 账号密码（首次部署跑迁移时创建用户） |
 | `LLM_API_KEY` | DeepSeek 等 API Key（Phase 2 才用，可先填占位） |
 | 其余（`DATABASE_URL`/`REDIS_URL`/`KUBECONFIG`/`K3S_SERVER_IP`） | 保持默认，不用动 |
 
