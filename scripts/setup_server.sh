@@ -89,6 +89,9 @@ chmod 600 "$KAIROS_HOME/kubeconfig/k3s.yaml"
 # ---------- 6. k8s manifests（顺序见 deploy/kubernetes/README.md）----------
 log "部署 demo-app 与监控组件"
 kubectl apply -f "$KAIROS_HOME/repo/deploy/kubernetes/demo-app.yaml"
+# promtail configmap 依赖 monitoring ns，但该 ns 在 node-exporter.yaml 里才定义，
+# 所以先声明式预创建（幂等，重复执行是 No Change）
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n monitoring create configmap promtail-config \
   --from-file=promtail-config.yml="$KAIROS_HOME/repo/deploy/observability/loki/promtail-config.yml" \
   --dry-run=client -o yaml | kubectl apply -f -
