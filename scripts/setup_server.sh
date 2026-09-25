@@ -133,6 +133,8 @@ done
 kubectl -n monitoring get secret prometheus-token \
   -o jsonpath='{.data.token}' | base64 -d > "$KAIROS_HOME/kubeconfig/prometheus-token"
 chmod 600 "$KAIROS_HOME/kubeconfig/prometheus-token"
+# Prometheus 容器以 uid 65534(nobody) 运行，读不了 root 属主的 600 文件
+chown 65534:65534 "$KAIROS_HOME/kubeconfig/prometheus-token"
 
 # ---------- 7. demo-app 镜像 ----------
 log "构建 kairos/demo-app 镜像"
