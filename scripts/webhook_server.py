@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 DEPLOY_SCRIPT = os.environ.get("DEPLOY_SCRIPT", "/opt/kairos/repo/scripts/deploy.sh")
 LISTEN_PORT = int(os.environ.get("WEBHOOK_PORT", "9000"))
-DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "1800"))
+DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "3600"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("kairos-webhook")

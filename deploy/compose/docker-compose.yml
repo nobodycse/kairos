@@ -28,6 +28,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/backend.Dockerfile
+      args:
+        - PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.org/simple}
     image: kairos/backend:${TAG:-latest}
     # 仅绑宿主机回环：公网不暴露，deploy.sh 健康检查直连
     ports:
