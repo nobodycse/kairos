@@ -120,7 +120,8 @@ log "启动平台层 compose"
 cd "$COMPOSE_DIR"
 PROFILE_ARGS=()
 [[ -f $KAIROS_HOME/repo/frontend/package.json ]] && PROFILE_ARGS=(--profile frontend)
-docker compose -f docker-compose.yml up -d --build "${PROFILE_ARGS[@]}"
+# compose v5 起 --profile 只作为全局旗标（子命令前），v2 两种位置均可
+docker compose "${PROFILE_ARGS[@]}" -f docker-compose.yml up -d --build
 
 log "启动监控栈 compose"
 docker compose -f docker-compose.monitor.yml up -d

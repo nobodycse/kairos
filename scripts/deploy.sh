@@ -31,8 +31,9 @@ PROFILE_ARGS=()
 
 log "构建镜像 tag=$NEW_TAG（当前运行：${OLD_TAG:-无}）"
 export TAG="$NEW_TAG"
-compose build
-compose up -d "${PROFILE_ARGS[@]}"
+# compose v5 起 --profile 只作为全局旗标（子命令前），v2 两种位置均可
+compose "${PROFILE_ARGS[@]}" build
+compose "${PROFILE_ARGS[@]}" up -d
 
 # 健康检查：最多 30 次 x 4s = 120s
 for i in $(seq 1 30); do
@@ -48,7 +49,7 @@ log "健康检查失败，回退到 ${OLD_TAG:-<无历史版本>}"
 compose logs --tail=50 backend || true
 if [[ -n "$OLD_TAG" && "$OLD_TAG" != "$NEW_TAG" ]]; then
   export TAG="$OLD_TAG"
-  compose up -d "${PROFILE_ARGS[@]}"
+  compose "${PROFILE_ARGS[@]}" up -d
   curl -fsS "$HEALTH_URL" >/dev/null 2>&1 \
     && log "已回退到 $OLD_TAG" \
     || log "回退后健康检查仍未通过，请人工介入"
