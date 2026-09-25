@@ -2,20 +2,32 @@
 
 Phase 0 stub：18 个端点（17 REST + 1 SSE）全部返回假数据，
 前端对着部署后的 /docs 开发（design.md §8.3 协作约定）。
+Phase 1 起：登录真连 users 表，cluster/faults 等仍为 stub。
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import auth, cluster, experiments, faults, reports, webhooks
+from core.db import engine
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await engine.dispose()
+
 
 app = FastAPI(
     title="KAIROS API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
-        "Phase 0 stub：全部路由返回假数据，契约见 docs/design.md §3/§4。\n\n"
+        "Phase 1：登录接真实 users 表；其余路由仍返回假数据，契约见 docs/design.md §3/§4。\n\n"
         "示例统一使用同一个故事：demo namespace 的 payment-service 发生 OOM。\n"
         "SSE 端点 /api/v1/faults/{id}/stream 的契约见 design.md §4（/docs 覆盖不了 SSE）。"
     ),
+    lifespan=lifespan,
 )
 
 # Phase 0 开发期放开跨域（前端本地 Vite devServer 直连）；Phase 1 收敛到部署域名

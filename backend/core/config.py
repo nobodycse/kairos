@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # 生产必须通过 .env 覆盖为随机 32+ 字符
     jwt_secret: str = "kairos-dev-secret-change-me"
     jwt_expire_hours: int = 24
+    # 初始 admin 密码（Alembic 种子迁移用，服务器 .env 必须覆盖）
+    admin_initial_password: str = "admin123"
     kubeconfig: str = "/kubeconfig/k3s.yaml"
     demo_namespace: str = "demo"
 
