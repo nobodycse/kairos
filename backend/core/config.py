@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 30
     database_url: str = "postgresql+asyncpg://kairos:kairos@localhost:5432/kairos"
     redis_url: str = "redis://localhost:6379/0"
+    # monitoring 三客户端（design.md §7；compose 网络内容器名，本地 dev 用 127.0.0.1）
+    prometheus_url: str = "http://prometheus:9090"
+    loki_url: str = "http://loki:3100"
     # 生产必须通过 .env 覆盖为随机 32+ 字符
     jwt_secret: str = "kairos-dev-secret-change-me"
     jwt_expire_hours: int = 24

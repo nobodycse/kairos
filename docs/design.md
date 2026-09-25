@@ -207,7 +207,7 @@ CREATE TABLE experiment_results (
 
 ### 3.2 GET /api/v1/cluster/overview
 
-200 响应（Dashboard 顶部卡片 + 趋势图数据源）：
+200 响应（Dashboard 顶部卡片快照；趋势图数据源见 §3.2.1）：
 
 ```json
 {
@@ -221,6 +221,24 @@ CREATE TABLE experiment_results (
   "p95_latency": 0.24
 }
 ```
+
+`qps` / `error_rate` / `p95_latency` 来自 Prometheus（demo_http_requests_total / demo_http_request_duration_seconds，见 §6.1）；`resources` 两个比值来自 cAdvisor/kube-state-metrics；`active_faults` 来自 DB（六态 active，§1.2）。**降级语义**：Prometheus 不可达时上述四组 Prometheus 相关字段为显式 `null`（K8s 结构数据不受影响）；K8s API 不可达则整个接口 502。
+
+### 3.2.1 GET /api/v1/cluster/trends?minutes=30
+
+趋势图数据源（Dashboard 折线图，前端 30s 轮询）。`minutes` 取值 5–1440（默认 30）；`step` 服务端自动取 `max(60, minutes*60/240)` 秒，控制点数不超过 240。200 响应：
+
+```json
+{
+  "interval_seconds": 60,
+  "points": [
+    {"ts": "2026-09-25T12:00:00Z", "qps": 7.2, "error_rate": 0.0, "p95_latency": 0.24},
+    {"ts": "2026-09-25T12:01:00Z", "qps": 7.5, "error_rate": 0.013, "p95_latency": 0.25}
+  ]
+}
+```
+
+三条曲线的 PromQL 与 §3.2 快照值同源（`demo_http_requests_total` / `demo_http_request_duration_seconds_bucket`）。Prometheus 不可达时返回 `{"interval_seconds": ..., "points": []}`（前端显示空图，不报错）。
 
 ### 3.3 GET /api/v1/cluster/pods?namespace=demo&page=1&page_size=20
 
@@ -667,6 +685,8 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 | JWT_SECRET | 随机 32+ 字符 | |
 | JWT_EXPIRE_HOURS | `24` | |
 | KUBECONFIG | `/kubeconfig/k3s.yaml` | 容器内路径，见 architecture.md §3 |
+| PROMETHEUS_URL | `http://prometheus:9090` | monitoring 客户端用；本地 dev 为 `http://127.0.0.1:9090` |
+| LOKI_URL | `http://loki:3100` | monitoring 客户端用；本地 dev 为 `http://127.0.0.1:3100` |
 | DEMO_NAMESPACE | `demo` | 参数白名单的目标 namespace |
 
 部署（compose / CI/CD）：
@@ -677,12 +697,18 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 | GRAFANA_ADMIN_PASSWORD | Grafana 管理员密码 |
 | WEBHOOK_SECRET | Gitee webhook HMAC 校验密钥 |
 | K3S_SERVER_IP | 宿主机内网 IP，用于改写 k3s.yaml 的 server 地址 |
+| ADMIN_INITIAL_PASSWORD | 初始 admin 密码（Alembic 种子迁移用，必须覆盖） |
 
 ---
 
-## 8. 附录：两人开发顺序
+## 8. 附录：开发顺序
 
-团队配置：后端 1 人（FastAPI + Agent + 部署 + CI/CD + 故障实验室），前端 1 人。全职假设约 8–10 周。
+> **单人开发调整（2026-09）**：项目现为一人负责。原 §8.1 的后端/前端两列不再表示两人分工，
+> 改为**纵向切片**执行——每个阶段把对应功能从前端到后端做穿（如 Phase 1 的
+> "cluster 接口真实化 + Dashboard 接真数据"在一个阶段内交付），§8.2 的"并行先行任务"
+> 与 §8.3 的"协作约定"随之失效；接口契约（§1–§7）全部继续有效，改动仍以本文档为准。
+
+团队配置（原始设计，供追溯）：后端 1 人（FastAPI + Agent + 部署 + CI/CD + 故障实验室），前端 1 人。全职假设约 8–10 周。
 
 ### 8.1 阶段计划
 

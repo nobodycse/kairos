@@ -11,11 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import auth, cluster, experiments, faults, reports, webhooks
 from core.db import engine
+from monitoring.clients import close_clients, init_clients
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_clients()
     yield
+    await close_clients()
     await engine.dispose()
 
 
