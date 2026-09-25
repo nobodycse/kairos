@@ -40,6 +40,25 @@ else
 fi
 systemctl enable --now k3s
 
+# k3s 的镜像解析走内置 containerd（与 /etc/docker/daemon.json 的 mirror 无关），
+# 国内环境为三大 registry 配置镜像端点，否则 Pod 永远卡在拉取 pause 镜像
+if [[ ! -f /etc/rancher/k3s/registries.yaml ]]; then
+  log "写入 containerd 镜像加速配置（国内环境）"
+  cat > /etc/rancher/k3s/registries.yaml <<'EOF'
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://docker.m.daocloud.io"
+  registry.k8s.io:
+    endpoint:
+      - "https://k8s.m.daocloud.io"
+  quay.io:
+    endpoint:
+      - "https://quay.m.daocloud.io"
+EOF
+  systemctl restart k3s
+fi
+
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 log "等待 k3s 节点 Ready"
 until kubectl get nodes 2>/dev/null | grep -qw Ready; do sleep 3; done
@@ -47,6 +66,11 @@ kubectl get nodes
 
 # ---------- 3. 目录与代码 ----------
 mkdir -p "$KAIROS_HOME"/{kubeconfig,data/{postgres,redis,prometheus,grafana,loki}}
+# 监控容器内进程的 uid（root 属主的目录会导致 Grafana/Loki/Prometheus 重启循环）：
+# grafana 472 / loki 10001 / prometheus 65534
+chown -R 472:472 "$KAIROS_HOME/data/grafana"
+chown -R 10001:10001 "$KAIROS_HOME/data/loki"
+chown -R 65534:65534 "$KAIROS_HOME/data/prometheus"
 
 if [[ "$REPO_DIR" != "$KAIROS_HOME/repo" ]]; then
   if [[ ! -d $KAIROS_HOME/repo/.git ]]; then
@@ -112,6 +136,9 @@ chmod 600 "$KAIROS_HOME/kubeconfig/prometheus-token"
 # ---------- 7. demo-app 镜像 ----------
 log "构建 kairos/demo-app 镜像"
 docker build -t kairos/demo-app:latest "$KAIROS_HOME/repo/demo-app"
+# k3s 的镜像内容库独立于 docker daemon：宿主机 build 出的镜像必须导入，
+# 否则 demo Pod 报 ErrImagePull（containerd 看不见 docker 的本地镜像）
+docker save kairos/demo-app:latest | /usr/local/bin/k3s ctr -n k8s.io images import -
 
 # ---------- 8. 双 compose ----------
 docker network inspect kairos-net >/dev/null 2>&1 || docker network create kairos-net
