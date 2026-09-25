@@ -1,19 +1,46 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { getOverview, type ClusterOverview } from '@/services/cluster'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { getOverview, getTrends, type ClusterOverview, type Trends } from '@/services/cluster'
 import { formatPercent } from '@/utils/format'
 import EChart from '@/components/EChart.vue'
 import type { EChartsOption } from 'echarts'
 
 const loading = ref(true)
 const overview = ref<ClusterOverview | null>(null)
+const trends = ref<Trends | null>(null)
+
+let overviewTimer: number | undefined
+let trendsTimer: number | undefined
+
+async function refreshOverview() {
+  try {
+    overview.value = await getOverview()
+  } catch {
+    /* 轮询失败静默，下一轮重试（token 过期由拦截器统一处理） */
+  }
+}
+
+async function refreshTrends() {
+  try {
+    trends.value = await getTrends(30)
+  } catch {
+    /* 同上 */
+  }
+}
 
 onMounted(async () => {
   try {
-    overview.value = await getOverview()
+    await Promise.all([refreshOverview(), refreshTrends()])
   } finally {
     loading.value = false
   }
+  overviewTimer = window.setInterval(refreshOverview, 15000)
+  trendsTimer = window.setInterval(refreshTrends, 30000)
+})
+
+onBeforeUnmount(() => {
+  window.clearInterval(overviewTimer)
+  window.clearInterval(trendsTimer)
 })
 
 const cards = computed(() => {
@@ -68,10 +95,57 @@ const memoryOption = computed<EChartsOption>(() =>
 )
 
 const traffic = computed(() => [
-  { label: 'QPS', value: overview.value ? overview.value.qps.toFixed(1) : '-' },
+  { label: 'QPS', value: overview.value?.qps != null ? overview.value.qps.toFixed(1) : '-' },
   { label: '错误率', value: formatPercent(overview.value?.error_rate, 2) },
-  { label: 'P95 延迟', value: overview.value ? `${overview.value.p95_latency.toFixed(2)}s` : '-' },
+  {
+    label: 'P95 延迟',
+    value: overview.value?.p95_latency != null ? `${overview.value.p95_latency.toFixed(2)}s` : '-',
+  },
 ])
+
+// 趋势折线（design.md §3.2.1）：QPS/P95 左轴，错误率百分比右轴
+const trendOption = computed<EChartsOption>(() => {
+  const points = trends.value?.points ?? []
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['QPS', '错误率', 'P95 延迟'], top: 0 },
+    grid: { left: 48, right: 48, top: 32, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      data: points.map((p) => p.ts.slice(11, 16)),
+      boundaryGap: false,
+    },
+    yAxis: [
+      { type: 'value', name: 'req/s / s', min: 0 },
+      { type: 'value', name: '%', min: 0, axisLabel: { formatter: '{value}%' } },
+    ],
+    series: [
+      {
+        name: 'QPS',
+        type: 'line',
+        showSymbol: false,
+        connectNulls: true,
+        data: points.map((p) => p.qps),
+      },
+      {
+        name: '错误率',
+        type: 'line',
+        yAxisIndex: 1,
+        showSymbol: false,
+        connectNulls: true,
+        data: points.map((p) => (p.error_rate == null ? null : Math.round(p.error_rate * 10000) / 100)),
+      },
+      {
+        name: 'P95 延迟',
+        type: 'line',
+        showSymbol: false,
+        connectNulls: true,
+        lineStyle: { type: 'dashed' },
+        data: points.map((p) => p.p95_latency),
+      },
+    ],
+  }
+})
 </script>
 
 <template>
@@ -96,19 +170,18 @@ const traffic = computed(() => [
       </el-col>
       <el-col :span="16">
         <el-card shadow="hover">
-          <template #header>服务指标</template>
+          <template #header>
+            <div class="card-header">
+              <span>服务指标趋势（近 30 分钟）</span>
+              <span class="hint">15s/30s 自动刷新</span>
+            </div>
+          </template>
           <el-descriptions :column="3" border>
             <el-descriptions-item v-for="t in traffic" :key="t.label" :label="t.label">
               {{ t.value }}
             </el-descriptions-item>
           </el-descriptions>
-          <el-alert
-            class="mt16"
-            type="info"
-            :closable="false"
-            show-icon
-            title="QPS / 错误率 / P95 的历史趋势图将在 Phase 1 接入 monitoring 后补充（当前为 overview 快照值）"
-          />
+          <EChart class="mt16" :option="trendOption" height="280px" />
         </el-card>
       </el-col>
     </el-row>
@@ -129,6 +202,17 @@ const traffic = computed(() => [
 }
 
 .stat-desc {
+  font-size: 12px;
+  color: #c0c4cc;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hint {
   font-size: 12px;
   color: #c0c4cc;
 }
