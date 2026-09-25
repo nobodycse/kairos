@@ -2,34 +2,39 @@
 # 注意：promtail Pod 使用 hostNetwork（见 deploy/kubernetes/promtail.yaml），
 # Loki 在宿主机 docker、端口绑 127.0.0.1:3100，因此直接推回环地址
 # 本文件是唯一来源：setup_server.sh 用它生成 k8s ConfigMap，勿在 manifest 里复写
+#
+# 为什么用 static_configs 而不是 kubernetes_sd：实测 k3s 1.36 上 SD 建立连接后
+# 不产出目标（无错误、targets 恒 0）。文件路径即元数据——
+# /var/log/containers/*.log 是指向 /var/log/pods/<ns>_<pod>_<uid>/<container>/0.log
+# 的符号链接，从 __path__ 提取 namespace/pod/container，LogQL 契约不变：
+# {namespace="demo", pod=~"payment-.*"} |= "ERROR"
 server:
   http_listen_port: 9080
 
 positions:
-  filename: /tmp/positions.yaml
+  filename: /tmp/positions.yaml  # hostPath /var/promtail 挂载在容器 /tmp（见 promtail.yaml）
 
 clients:
   - url: http://127.0.0.1:3100/loki/api/v1/push
 
 scrape_configs:
   - job_name: kubernetes-pods
-    kubernetes_sd_configs:
-      - role: pod
-    relabel_configs:
-      # 只采集 Running/Pending 阶段的 Pod
-      - source_labels: [__meta_kubernetes_pod_phase]
-        action: keep
-        regex: Running|Pending
-      # 打上 namespace / pod / container / app 标签（Agent 查日志的 LogQL 依赖它们：
-      # {namespace="demo", pod=~"payment-.*"} |= "ERROR"）
-      - source_labels: [__meta_kubernetes_namespace]
-        target_label: namespace
-      - source_labels: [__meta_kubernetes_pod_name]
-        target_label: pod
-      - source_labels: [__meta_kubernetes_pod_container_name]
-        target_label: container
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        target_label: app
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: kubernetes-pods
+          __path__: /var/log/containers/*.log
     pipeline_stages:
-      # k8s 容器日志为 CRI 格式
+      # k8s 容器日志为 CRI 格式（containerd：JSON 包装的 time/stream/log）
       - cri: {}
+    relabel_configs:
+      # /var/log/pods/<namespace>_<pod>_<uid>/<container>/0.log → 各元数据标签
+      - source_labels: [__path__]
+        regex: .*/pods/([^_]+)_[^_]+_[^/]+/.*
+        target_label: namespace
+      - source_labels: [__path__]
+        regex: .*/pods/[^_]+_([^_]+)_[^/]+/.*
+        target_label: pod
+      - source_labels: [__path__]
+        regex: .*/pods/[^/]+/([^/]+)/\d+\.log
+        target_label: container
