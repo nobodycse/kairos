@@ -2,7 +2,10 @@
 
 只封装 /api/v1/query 与 /api/v1/query_range，返回 monitoring.models 的
 Sample/Series。网络错误向上抛（cluster 路由按软依赖语义捕获后置 null）。
+NaN/Inf 样本（新序列上 histogram_quantile 等会返回）一律丢弃，
+否则 FastAPI 序列化 NaN 直接 500。
 """
+import math
 import time
 
 import httpx
@@ -27,12 +30,12 @@ class PrometheusClient:
         out: list[Sample] = []
         for r in data.get("result", []):
             try:
-                ts, val = r["value"]
-                out.append(
-                    Sample(metric=r.get("metric", {}), value=float(val), timestamp=float(ts))
-                )
-            except (KeyError, ValueError):
+                ts, val = float(r["value"][0]), float(r["value"][1])
+            except (KeyError, ValueError, IndexError):
                 continue
+            if not math.isfinite(val):
+                continue
+            out.append(Sample(metric=r.get("metric", {}), value=val, timestamp=ts))
         return out
 
     async def query_range(
@@ -46,11 +49,13 @@ class PrometheusClient:
         out: list[Series] = []
         for r in data.get("result", []):
             values = []
-            for ts, val in r.get("values", []):
+            for raw_ts, raw_val in r.get("values", []):
                 try:
-                    values.append((float(ts), float(val)))
+                    ts, val = float(raw_ts), float(raw_val)
                 except ValueError:
                     continue
+                if math.isfinite(val):
+                    values.append((ts, val))
             out.append(Series(metric=r.get("metric", {}), values=values))
         return out
 
