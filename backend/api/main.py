@@ -11,14 +11,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import auth, cluster, experiments, faults, reports, webhooks
 from core.db import engine
+from core.redis import close as redis_close, ping as redis_ping
 from monitoring.clients import close_clients, init_clients
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_clients()
+    await redis_ping()
     yield
     await close_clients()
+    await redis_close()
     await engine.dispose()
 
 

@@ -77,11 +77,17 @@ class Experiment(Base):
     )
 
 
-# fault_events 的活跃状态集合：告警归并的部分索引条件（design.md §2 / §5.3）
-_ACTIVE_STATUSES = (
-    "'detected','diagnosing','awaiting_approval',"
-    "'remediating','verifying','rolling_back'"
+# fault_events 的活跃状态集合：告警归并的部分索引条件（design.md §2 / §5.3），
+# 也是 §1.2 定义的 active 语义（webhook 归并、overview.active_faults、faults 列表共用）
+ACTIVE_STATUSES = (
+    "detected",
+    "diagnosing",
+    "awaiting_approval",
+    "remediating",
+    "verifying",
+    "rolling_back",
 )
+_ACTIVE_STATUSES_SQL = "(" + ",".join(f"'{s}'" for s in ACTIVE_STATUSES) + ")"
 
 
 class FaultEvent(Base):
@@ -100,7 +106,7 @@ class FaultEvent(Base):
             "idx_fault_events_active_ns_wl",
             "namespace",
             "workload",
-            postgresql_where=text(f"status IN ({_ACTIVE_STATUSES})"),
+            postgresql_where=text(f"status IN ({_ACTIVE_STATUSES_SQL})"),
         ),
     )
 

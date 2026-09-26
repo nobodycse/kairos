@@ -6,8 +6,12 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import require_user
+from core.db import get_db
+from models import ACTIVE_STATUSES, FaultEvent
 from monitoring import clients
 from monitoring.models import PodInfo
 
@@ -78,13 +82,23 @@ async def _k8s_pods(ns: str | None) -> list[PodInfo]:
 
 
 @router.get("/overview", summary="集群总览快照（§3.2）")
-async def overview(_: str = Depends(require_user)):
+async def overview(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
     try:
         pods = await clients.k8s.list_pods()
         deps = await clients.k8s.list_deployments()
         nodes = await clients.k8s.list_nodes()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"K8s API 不可达: {e}") from e
+
+    # §3.2：active_faults 来自 DB（六态 active 计数）
+    fault_rows = [
+        ev
+        for ev in (await db.execute(select(FaultEvent))).scalars().all()
+        if ev.status in ACTIVE_STATUSES
+    ]
 
     return {
         "nodes": {
@@ -101,8 +115,8 @@ async def overview(_: str = Depends(require_user)):
             "total": len(deps),
             "available": sum(1 for d in deps if d.ready_replicas >= d.replicas),
         },
-        # Phase 1 三阶段接 webhook 落库后改为查 fault_events（§5.3 六态 active）
-        "active_faults": 0,
+        # §3.2：active_faults 来自 DB（六态 active 计数，webhook 落库后即为真实值）
+        "active_faults": len(fault_rows),
         "resources": {
             "cpu_usage_ratio": await _scalar(_CPU_RATIO),
             "memory_usage_ratio": await _scalar(_MEM_RATIO),

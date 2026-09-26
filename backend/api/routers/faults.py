@@ -1,94 +1,208 @@
 """故障事件：列表 / 详情 / 触发诊断 / SSE 流 / 人工确认（design.md §3.5–§3.8、§4）。
 
-Phase 0 返回假数据 + SSE 演示序列；Phase 2 接 LangGraph 与 Redis pub/sub。
+Phase 1 三阶段：列表/详情接 fault_events 真数据（§3.5/§3.6）；
+diagnose/approve/reject 仍是 stub（Phase 2 接 LangGraph，§5.1/§5.2）；
+SSE 保持演示序列（真实时线 Phase 2 随 agent 落地）。
+
+查询走 ORM 参数化表达式；事件量级小，过滤/排序/分页在 Python 侧完成
+（与 cluster 路由的内存分页风格一致）。
 """
 import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api import mock
 from api.deps import require_user
+from core.db import get_db
 from core.security import decode_access_token
+from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction
 
 router = APIRouter(tags=["faults"])
 
 # 终态：不允许再触发诊断（design.md §3.7）
 _TERMINAL_STATES = {"resolved", "failed", "closed"}
+_ALL_STATES = set(ACTIVE_STATUSES) | _TERMINAL_STATES
 
 
-@router.get("/faults", summary="故障事件列表（status 支持枚举值或 active，namespace 过滤）")
-def list_faults(
-    status: str | None = None,
-    namespace: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    _: str = Depends(require_user),
-):
-    items = mock.list_faults(status, namespace)
-    start = (page - 1) * page_size
+def _list_item(ev: FaultEvent) -> dict:
+    """§3.5 列表条目投影。"""
     return {
-        "items": items[start : start + page_size],
+        "id": ev.id,
+        "alert_name": ev.alert_name,
+        "severity": ev.severity,
+        "namespace": ev.namespace,
+        "workload": ev.workload,
+        "status": ev.status,
+        "detected_at": ev.detected_at.isoformat() if ev.detected_at else None,
+        "resolved_at": ev.resolved_at.isoformat() if ev.resolved_at else None,
+        "mttr_seconds": ev.mttr_seconds,
+    }
+
+
+def _paginate(items: list, page: int, page_size: int) -> dict:
+    return {
+        "items": items[(page - 1) * page_size : page * page_size],
         "total": len(items),
         "page": page,
         "page_size": page_size,
     }
 
 
+async def _faults_by(db: AsyncSession, status: str | None, namespace: str | None) -> list[FaultEvent]:
+    """全量取回后 Python 侧过滤排序（事件量级小，见模块注释）。"""
+    rows = list((await db.execute(select(FaultEvent))).scalars().all())
+    if status == "active":
+        rows = [ev for ev in rows if ev.status in ACTIVE_STATUSES]
+    elif status:
+        rows = [ev for ev in rows if ev.status == status]
+    if namespace:
+        rows = [ev for ev in rows if ev.namespace == namespace]
+    rows.sort(key=lambda ev: ev.detected_at, reverse=True)  # §3.5：detected_at 倒序
+    return rows
+
+
+@router.get("/faults", summary="故障事件列表（status 支持枚举值或 active，namespace 过滤）")
+async def list_faults(
+    status: str | None = None,
+    namespace: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
+    if status and status != "active" and status not in _ALL_STATES:
+        raise HTTPException(status_code=400, detail=f"非法 status: {status}")
+    rows = await _faults_by(db, status, namespace)
+    return _paginate([_list_item(ev) for ev in rows], page, page_size)
+
+
+def _diagnosis_dict(d: Diagnosis) -> dict:
+    return {
+        "id": d.id,
+        "fault_type": d.fault_type,
+        "root_cause": d.root_cause,
+        "evidence": d.evidence or [],
+        "confidence": d.confidence,
+        "blast_radius": d.blast_radius,
+        "suggestion": d.suggestion,
+        "llm_model": d.llm_model,
+        "iterations": d.iterations,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+    }
+
+
+def _remediation_dict(r: RemediationAction) -> dict:
+    return {
+        "id": r.id,
+        "action": r.action,
+        "namespace": r.namespace,
+        "target": r.target,
+        "params": r.params or {},
+        "risk_level": r.risk_level,
+        "policy": r.policy,
+        "status": r.status,
+        "approved_by": r.approved_by,
+        "snapshot": r.snapshot,
+        "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+    }
+
+
+async def _load_detail(db: AsyncSession, ev: FaultEvent) -> dict:
+    """§3.6 详情：一次取全（diagnosis 取最新一条，remediations 按创建正序）。"""
+    detail = _list_item(ev)
+    detail.update(
+        {
+            "fingerprint": ev.fingerprint,
+            "labels": ev.labels or {},
+            "rediagnose_count": ev.rediagnose_count,
+            "experiment_id": ev.experiment_id,
+            "diagnosis": None,
+            "remediations": [],
+        }
+    )
+    diag_all = list((await db.execute(select(Diagnosis))).scalars().all())
+    diag_rows = [d for d in diag_all if d.fault_event_id == ev.id]
+    if diag_rows:
+        latest = max(diag_rows, key=lambda d: d.created_at)
+        detail["diagnosis"] = _diagnosis_dict(latest)
+    rem_all = list((await db.execute(select(RemediationAction))).scalars().all())
+    rem_rows = [r for r in rem_all if r.fault_event_id == ev.id]
+    rem_rows.sort(key=lambda r: r.created_at)
+    detail["remediations"] = [_remediation_dict(r) for r in rem_rows]
+    return detail
+
+
 @router.get("/faults/{fault_id}", summary="事件详情（诊断中时 diagnosis 为 null）")
-def get_fault(fault_id: int, _: str = Depends(require_user)):
-    fault = mock.FAULTS.get(fault_id)
-    if fault is None:
+async def get_fault(
+    fault_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
+    ev = await db.get(FaultEvent, fault_id)
+    if ev is None:
         raise HTTPException(status_code=404, detail="故障事件不存在")
-    return fault
+    return await _load_detail(db, ev)
 
 
 @router.post("/faults/{fault_id}/diagnose", status_code=202, summary="手动（重新）触发诊断")
-def diagnose(fault_id: int, _: str = Depends(require_user)):
-    fault = mock.FAULTS.get(fault_id)
-    if fault is None:
+async def diagnose(
+    fault_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
+    ev = await db.get(FaultEvent, fault_id)
+    if ev is None:
         raise HTTPException(status_code=404, detail="故障事件不存在")
-    if fault["status"] == "diagnosing":
+    if ev.status == "diagnosing":
         raise HTTPException(status_code=409, detail="该事件正在诊断中")
-    if fault["status"] in _TERMINAL_STATES:
+    if ev.status in _TERMINAL_STATES:
         raise HTTPException(status_code=409, detail="该事件已结束")
     # Phase 2 在此 asyncio.create_task(agent_runner.run(fault_id))（design.md §5.1）
     return {"fault_event_id": fault_id, "status": "diagnosing"}
 
 
 @router.post("/remediations/{remediation_id}/approve", summary="人工批准修复")
-def approve(remediation_id: int, _: str = Depends(require_user)):
-    remediation = mock.FAULTS[42]["remediations"][0]
-    if remediation_id != remediation["id"]:
+async def approve(
+    remediation_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
+    rem = await db.get(RemediationAction, remediation_id)
+    if rem is None:
         raise HTTPException(status_code=404, detail="修复动作不存在")
-    if remediation["status"] != "pending":
+    if rem.status != "pending":
         raise HTTPException(status_code=409, detail="该动作当前状态不允许此操作")
-    # stub：同步更新内存状态（二次调用可测 409）；Phase 2 在此以
+    # stub：同步更新状态（二次调用可测 409）；Phase 2 在此以
     # Command(resume={"approved": True}) 恢复挂起的 graph（design.md §5.2）
-    remediation["status"] = "approved"
-    mock.FAULTS[42]["status"] = "remediating"
-    return {
-        "id": remediation_id,
-        "status": "approved",
-        "fault_event_status": "remediating",
-    }
+    rem.status = "approved"
+    ev = await db.get(FaultEvent, rem.fault_event_id)
+    if ev is not None:
+        ev.status = "remediating"
+    await db.commit()
+    return {"id": remediation_id, "status": "approved", "fault_event_status": "remediating"}
 
 
 @router.post("/remediations/{remediation_id}/reject", summary="人工拒绝修复")
-def reject(remediation_id: int, _: str = Depends(require_user)):
-    remediation = mock.FAULTS[42]["remediations"][0]
-    if remediation_id != remediation["id"]:
+async def reject(
+    remediation_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_user),
+):
+    rem = await db.get(RemediationAction, remediation_id)
+    if rem is None:
         raise HTTPException(status_code=404, detail="修复动作不存在")
-    if remediation["status"] != "pending":
+    if rem.status != "pending":
         raise HTTPException(status_code=409, detail="该动作当前状态不允许此操作")
-    remediation["status"] = "rejected"
-    mock.FAULTS[42]["status"] = "closed"
-    return {
-        "id": remediation_id,
-        "status": "rejected",
-        "fault_event_status": "closed",
-    }
+    rem.status = "rejected"
+    ev = await db.get(FaultEvent, rem.fault_event_id)
+    if ev is not None:
+        ev.status = "closed"
+    await db.commit()
+    return {"id": remediation_id, "status": "rejected", "fault_event_status": "closed"}
 
 
 def _sse_frame(event: str, data: dict) -> str:
@@ -100,15 +214,19 @@ def _sse_frame(event: str, data: dict) -> str:
     summary="SSE 事件流（契约见 design.md §4，/docs 覆盖不了 SSE）",
     response_class=StreamingResponse,
 )
-async def stream(fault_id: int, token: str = Query(...)):
+async def stream(
+    fault_id: int,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
     # EventSource 不能设置请求头，JWT 走 query 参数（design.md §4.1）
     if decode_access_token(token) is None:
         raise HTTPException(status_code=401, detail="token 无效或已过期")
-    if fault_id not in mock.FAULTS:
+    if await db.get(FaultEvent, fault_id) is None:
         raise HTTPException(status_code=404, detail="故障事件不存在")
 
     async def event_stream():
-        # 连接/重连先发 snapshot（design.md §4.2）
+        # 连接/重连先发 snapshot（design.md §4.2）；Phase 2 接真实 agent 事件
         yield _sse_frame("snapshot", mock.SSE_SNAPSHOT)
         # 演示性 agent_step 序列：2s 一帧，tool_start/tool_end 成对（§4.4）
         for step in mock.SSE_DEMO_STEPS:

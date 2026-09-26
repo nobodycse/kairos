@@ -60,6 +60,19 @@ class K8sClient:
 
     # ---------- workload 推导 ----------
 
+    async def workload_of_pod(self, ns: str, pod_name: str) -> str | None:
+        """公开方法：按 namespace+pod 名推导 workload（webhook 归并用，§5.3）。
+
+        pod 已删除（OOMKilled 后被替换等）返回 None。
+        """
+        try:
+            pod = await self._core.read_namespaced_pod(pod_name, ns)
+        except k8s.ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+        return await self._workload_of(pod)
+
     async def _workload_of(self, pod) -> str | None:
         """pod → ownerReferences(ReplicaSet) → Deployment 名；缓存 5 分钟。"""
         refs = pod.metadata.owner_references or []
