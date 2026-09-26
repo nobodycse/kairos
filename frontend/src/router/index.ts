@@ -30,6 +30,12 @@ const router = createRouter({
           meta: { title: '资源列表' },
         },
         {
+          path: 'faults',
+          name: 'faults',
+          component: () => import('@/views/FaultListView.vue'),
+          meta: { title: '故障事件' },
+        },
+        {
           path: 'diagnosis/:faultId',
           name: 'diagnosis',
           component: () => import('@/views/DiagnosisView.vue'),

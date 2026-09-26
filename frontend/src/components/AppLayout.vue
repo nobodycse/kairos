@@ -40,6 +40,10 @@ function handleCommand(command: string) {
           <el-icon><Monitor /></el-icon>
           <span>资源列表</span>
         </el-menu-item>
+        <el-menu-item index="faults" :route="{ name: 'faults' }">
+          <el-icon><Warning /></el-icon>
+          <span>故障事件</span>
+        </el-menu-item>
         <el-menu-item index="diagnosis" :route="{ name: 'diagnosis', params: { faultId: 42 } }">
           <el-icon><Search /></el-icon>
           <span>诊断详情</span>
