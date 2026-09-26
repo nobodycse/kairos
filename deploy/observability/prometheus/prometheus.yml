@@ -27,8 +27,26 @@ scrape_configs:
       - targets: ["host.docker.internal:30760"]
 
   - job_name: demo-app
-    static_configs:
-      - targets: ["host.docker.internal:30780"]
+    # per-pod 抓取：NodePort 单目标抓多副本时，/metrics 在副本间随机切换，
+    # Counter 序列交替出现两个值，rate() 会误算出虚假速率（告警永不恢复）。
+    # 经 kubernetes_sd 按 pod 发现目标，pod/namespace 标签由 relabel 注入
+    kubernetes_sd_configs:
+      - role: pod
+        api_server: https://host.docker.internal:6443
+        tls_config:
+          insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/token
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_namespace]
+        action: keep
+        regex: demo
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        action: keep
+        regex: "8000"
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
 
   - job_name: kubelet
     scheme: https

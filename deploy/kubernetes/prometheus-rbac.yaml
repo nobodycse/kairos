@@ -33,6 +33,10 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["list", "watch"]
+  # demo-app 的 per-pod 抓取需要服务发现（prometheus.yml kubernetes_sd）
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
   - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
     verbs: ["get"]
 ---
