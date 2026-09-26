@@ -14,13 +14,16 @@ groups:
         annotations:
           summary: "{{ $labels.namespace }}/{{ $labels.pod }} 10 分钟内重启超过 3 次"
 
+      # last_terminated_reason 是信息型 gauge（OOM 后恒 1、序列诞生即 1），
+      # increase() 对它恒为 0；max_over_time 表达"10 分钟内发生过 OOM"，
+      # 窗口滑过自动恢复
       - alert: PodOOMKilled
-        expr: increase(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[10m]) > 0
+        expr: max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[10m]) >= 1
         for: 0m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.namespace }}/{{ $labels.pod }} 容器被 OOMKilled"
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} 容器被 OOMKilled（10 分钟内）"
 
       # VERIFY: 跨 cAdvisor / kube-state-metrics 两个 job 的指标相除，需验证 join
       - alert: ContainerMemoryHigh
