@@ -715,7 +715,7 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 | 阶段 | 后端 | 前端 | 里程碑 |
 |---|---|---|---|
 | Phase 0（第 1 周） | 服务器初始化（k3s/Docker/双 compose/demo-app/监控栈）；FastAPI 骨架——全部 router 建 stub 返回假数据；Gitee webhook + deploy.sh | Vue3+TS+Vite+EP 脚手架、布局路由、登录页、API service 层、SSE 客户端封装 | push 到 main → 自动部署 → 打开服务器 IP 见登录页 |
-| Phase 1（第 2–3 周） | monitoring/ 三客户端；cluster 路由接真实数据；webhook 接入 + 去重归并 + fault_events 落库（状态机先只做 detected） | Dashboard 总览页、资源列表页、故障事件列表页 | 手动制造 OOM，前端看到故障事件出现 |
+| Phase 1（第 2–3 周）✅ 已完成（2026-09） | monitoring/ 三客户端；cluster 路由接真实数据；webhook 接入 + 去重归并 + fault_events 落库（状态机先只做 detected） | Dashboard 总览页、资源列表页、故障事件列表页 | 手动制造 OOM，前端看到故障事件出现 |
 | Phase 2（第 4–6 周） | LLM 适配层 → 8 查询工具 → LangGraph（collect→analyze→propose）→ RCA + SSE agent_step → risk_control + executor + interrupt → verification + 回滚 | **诊断详情页**（最大工作量，拆两轮：先只读时间线，再加确认交互） | 走通 README 16 步 Demo |
 | Phase 3（第 7–8 周） | fault-lab 注入、experiments API、评估汇总 | 实验室页、历史与报告页、修复前后指标对比 | 跑 3 类故障实验出评估表 |
 

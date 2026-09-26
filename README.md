@@ -725,19 +725,19 @@ ai-k8s-ops/
 
 # 🚀 开发路线
 
-## Phase 1：Kubernetes 基础设施
+## Phase 1：Kubernetes 基础设施 ✅
 
-- [ ] 搭建 Kubernetes 集群
-- [ ] 部署示例微服务
-- [ ] 学习 Kubernetes API
-- [ ] 实现 Python 获取 Pod / Deployment / Node 信息
+- [x] 搭建 Kubernetes 集群
+- [x] 部署示例微服务
+- [x] 学习 Kubernetes API
+- [x] 实现 Python 获取 Pod / Deployment / Node 信息
 
-## Phase 2：可观测性
+## Phase 2：可观测性 ✅
 
-- [ ] 部署 Prometheus
-- [ ] 部署 Grafana
-- [ ] 部署 Loki
-- [ ] 建立 Metrics / Logs / Events 数据采集模块
+- [x] 部署 Prometheus
+- [x] 部署 Grafana
+- [x] 部署 Loki
+- [x] 建立 Metrics / Logs / Events 数据采集模块
 
 ## Phase 3：故障检测
 
