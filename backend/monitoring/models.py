@@ -44,6 +44,16 @@ class DeploymentInfo(BaseModel):
     image: str
     cpu_limit: str | None  # K8s quantity 原样（"500m"）
     memory_limit: str | None  # K8s quantity 原样（"512Mi"）
+    labels: dict[str, str] = {}  # metadata.labels（白名单 kairos.io/managed 检查用）
+
+
+class EndpointsInfo(BaseModel):
+    """Service Endpoints 的地址计数（Phase 2 Agent 工具 get_service_status 底层）。"""
+
+    namespace: str
+    service: str
+    ready_addresses: int
+    not_ready_addresses: int
 
 
 class K8sEvent(BaseModel):

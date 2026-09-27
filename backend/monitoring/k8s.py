@@ -11,7 +11,7 @@ from kubernetes_asyncio import client as k8s
 from kubernetes_asyncio import config as k8s_config
 
 from core.config import settings
-from monitoring.models import DeploymentInfo, K8sEvent, NodeInfo, PodInfo
+from monitoring.models import DeploymentInfo, EndpointsInfo, K8sEvent, NodeInfo, PodInfo
 
 _WORKLOAD_CACHE_TTL = 300  # 秒，§5.3 owner 缓存
 
@@ -39,6 +39,10 @@ def _parse_quantity(q: str | None) -> float | None:
         return float(q)
     except ValueError:
         return None
+
+
+# 公开别名：risk_control 白名单校验 limit 调整幅度时复用（0.5x–4x，§11.1）
+parse_quantity = _parse_quantity
 
 
 class K8sClient:
@@ -209,6 +213,7 @@ class K8sClient:
             image=containers[0].image if containers else "",
             cpu_limit=(limits or {}).get("cpu"),
             memory_limit=(limits or {}).get("memory"),
+            labels=dict(dep.metadata.labels or {}),
         )
 
     async def get_deployment(self, ns: str, name: str) -> DeploymentInfo | None:
@@ -251,6 +256,23 @@ class K8sClient:
                 )
             )
         return out
+
+    # ---------- Service ----------
+
+    async def get_service_endpoints(self, ns: str, name: str) -> EndpointsInfo | None:
+        """Service 的 Endpoints 地址计数（Phase 2 工具 get_service_status 底层）。"""
+        try:
+            eps = await self._core.read_namespaced_endpoints(name, ns)
+        except k8s.ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+        subsets = eps.subsets or []
+        ready = sum(len(s.addresses or []) for s in subsets)
+        not_ready = sum(len(s.not_ready_addresses or []) for s in subsets)
+        return EndpointsInfo(
+            namespace=ns, service=name, ready_addresses=ready, not_ready_addresses=not_ready
+        )
 
     # ---------- Node ----------
 
