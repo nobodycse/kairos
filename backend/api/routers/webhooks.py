@@ -3,7 +3,7 @@
 处理链：fingerprint 去重（Redis SET NX EX 3600）→ 归并（namespace+workload
 活跃事件，labels 并集 / severity 取高 / 保留最早 detected_at）→ fault_events
 落库。resolved 告警不改状态机之外的东西：合入既有事件并置 resolved + MTTR。
-Phase 2 在落库后接 agent_runner 触发诊断（§5.1，此处留 TODO）。
+落库后由 agent_runner.trigger 触发诊断（§5.1/§5.3.3，抢锁失败=事件已在诊断中，静默跳过）。
 
 查询全部走 SQLAlchemy ORM 参数化表达式（filter_by 编译为占位符绑定）；
 事件量级极小，排序在 Python 侧完成（与 cluster 路由的内存分页风格一致）。
@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent import runner as agent_runner
 from core.config import settings
 from core.db import get_db
 from core.redis import r as redis
@@ -80,7 +81,8 @@ async def _handle_firing(db: AsyncSession, alert: dict, counts: dict) -> None:
             existing.updated_at = now
             await db.commit()
             counts["merged"] += 1
-            # TODO(Phase 2 §5.1): agent_runner 触发（Redis 抢锁 SET event:{id}:running NX EX 1800）
+            # §5.3.3：抢锁失败 = 该事件已有 graph 在跑，静默跳过
+            await agent_runner.trigger(existing.id)
         else:
             ev = FaultEvent()
             ev.fingerprint = fingerprint
@@ -95,7 +97,7 @@ async def _handle_firing(db: AsyncSession, alert: dict, counts: dict) -> None:
             db.add(ev)
             await db.commit()
             counts["created"] += 1
-            # TODO(Phase 2 §5.1): 同上
+            await agent_runner.trigger(ev.id)  # §5.1：落库后进程内起诊断图
     except Exception:
         # 落库失败时撤销指纹占用，让下一次 webhook 能重试（否则 1h 内全被 ignored）
         if fingerprint:

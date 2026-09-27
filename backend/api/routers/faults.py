@@ -1,31 +1,51 @@
 """故障事件：列表 / 详情 / 触发诊断 / SSE 流 / 人工确认（design.md §3.5–§3.8、§4）。
 
-Phase 1 三阶段：列表/详情接 fault_events 真数据（§3.5/§3.6）；
-diagnose/approve/reject 仍是 stub（Phase 2 接 LangGraph，§5.1/§5.2）；
-SSE 保持演示序列（真实时线 Phase 2 随 agent 落地）。
+Phase 1：列表/详情接 fault_events 真数据（§3.5/§3.6）；SSE 保持演示序列
+（真实时线 Phase 2 阶段三随 SSE 真实化落地）。Phase 2 阶段二：diagnose 真实
+触发 agent_runner（§5.1/§5.5），approve/reject 补 approved_by/审计并恢复挂起图
+（§5.2）。
 
 查询走 ORM 参数化表达式；事件量级小，过滤/排序/分页在 Python 侧完成
 （与 cluster 路由的内存分页风格一致）。
 """
 import asyncio
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent import runner as agent_runner
 from api import mock
 from api.deps import require_user
 from core.db import get_db
 from core.security import decode_access_token
-from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction
+from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction, User
+from risk_control.audit import resource_for, write_audit
 
 router = APIRouter(tags=["faults"])
 
-# 终态：不允许再触发诊断（design.md §3.7）
-_TERMINAL_STATES = {"resolved", "failed", "closed"}
-_ALL_STATES = set(ACTIVE_STATUSES) | _TERMINAL_STATES
+# 对 diagnose 而言的已结束状态：resolved/closed（§3.7「该事件已结束」）。
+# failed 不在其列——§5.1 明文孤儿置 failed 后"人工可 §3.7 重新触发"。
+_ENDED_STATES = {"resolved", "closed"}
+# 活跃但非诊断中的状态：重入被拒（防同事件多图，配合 Redis 锁双保险）
+_ACTIVE_BLOCKING = ("awaiting_approval", "remediating", "verifying", "rolling_back")
+_ALL_STATES = set(ACTIVE_STATUSES) | {"resolved", "failed", "closed"}
+
+
+class _DecisionBody(BaseModel):
+    """approve/reject 可选请求体（§3.8：comment 仅记录进审计）。"""
+
+    comment: str | None = None
+
+
+async def _user_id(db: AsyncSession, username: str) -> int | None:
+    """username → users.id（users 表量级小，Python 侧过滤；Mimosa 对 where(==) 有误报）。"""
+    rows = list((await db.execute(select(User))).scalars().all())
+    return next((u.id for u in rows if u.username == username), None)
 
 
 def _list_item(ev: FaultEvent) -> dict:
@@ -157,40 +177,63 @@ async def diagnose(
     ev = await db.get(FaultEvent, fault_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="故障事件不存在")
+    if ev.status in _ENDED_STATES:
+        raise HTTPException(status_code=409, detail="该事件已结束")
     if ev.status == "diagnosing":
         raise HTTPException(status_code=409, detail="该事件正在诊断中")
-    if ev.status in _TERMINAL_STATES:
-        raise HTTPException(status_code=409, detail="该事件已结束")
-    # Phase 2 在此 asyncio.create_task(agent_runner.run(fault_id))（design.md §5.1）
+    if ev.status in _ACTIVE_BLOCKING:
+        # 契约只定义两种 409 文案；此处为同族补充（awaiting_approval 等重入拒绝）
+        raise HTTPException(status_code=409, detail="该事件正在处理中")
+    # detected / failed（§5.1：failed 可人工重新触发）→ 抢锁后进程内起图
+    triggered = await agent_runner.trigger(fault_id)
+    if not triggered:
+        raise HTTPException(status_code=409, detail="该事件正在诊断中")
     return {"fault_event_id": fault_id, "status": "diagnosing"}
 
 
 @router.post("/remediations/{remediation_id}/approve", summary="人工批准修复")
 async def approve(
     remediation_id: int,
+    body: _DecisionBody | None = None,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(require_user),
+    username: str = Depends(require_user),
 ):
     rem = await db.get(RemediationAction, remediation_id)
     if rem is None:
         raise HTTPException(status_code=404, detail="修复动作不存在")
     if rem.status != "pending":
         raise HTTPException(status_code=409, detail="该动作当前状态不允许此操作")
-    # stub：同步更新状态（二次调用可测 409）；Phase 2 在此以
-    # Command(resume={"approved": True}) 恢复挂起的 graph（design.md §5.2）
     rem.status = "approved"
+    rem.approved_by = await _user_id(db, username)
     ev = await db.get(FaultEvent, rem.fault_event_id)
     if ev is not None:
         ev.status = "remediating"
+        ev.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    await write_audit(
+        db,
+        actor=f"user:{username}",
+        action="approve",
+        resource=resource_for("remediation", rem.namespace, rem.target),
+        params=rem.params or {},
+        result="success",
+        detail={
+            "comment": body.comment if body else None,
+            "remediation_id": remediation_id,
+            "fault_event_id": rem.fault_event_id,
+        },
+    )
+    # §5.2：Command(resume={"approved": True}) 恢复挂起图（阶段二恢复后走交接桩）
+    agent_runner.spawn_resume(rem.fault_event_id, approved=True)
     return {"id": remediation_id, "status": "approved", "fault_event_status": "remediating"}
 
 
 @router.post("/remediations/{remediation_id}/reject", summary="人工拒绝修复")
 async def reject(
     remediation_id: int,
+    body: _DecisionBody | None = None,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(require_user),
+    username: str = Depends(require_user),
 ):
     rem = await db.get(RemediationAction, remediation_id)
     if rem is None:
@@ -201,7 +244,22 @@ async def reject(
     ev = await db.get(FaultEvent, rem.fault_event_id)
     if ev is not None:
         ev.status = "closed"
+        ev.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    await write_audit(
+        db,
+        actor=f"user:{username}",
+        action="reject",
+        resource=resource_for("remediation", rem.namespace, rem.target),
+        params=rem.params or {},
+        result="success",
+        detail={
+            "comment": body.comment if body else None,
+            "remediation_id": remediation_id,
+            "fault_event_id": rem.fault_event_id,
+        },
+    )
+    agent_runner.spawn_resume(rem.fault_event_id, approved=False)  # 恢复图走 closed 收尾
     return {"id": remediation_id, "status": "rejected", "fault_event_status": "closed"}
 
 

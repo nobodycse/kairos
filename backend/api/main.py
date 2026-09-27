@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routers import auth, cluster, experiments, faults, reports, webhooks
+from agent.runner import recover_orphans
 from core.db import engine
 from core.redis import close as redis_close, ping as redis_ping
 from monitoring.clients import close_clients, init_clients
@@ -19,6 +20,7 @@ from monitoring.clients import close_clients, init_clients
 async def lifespan(app: FastAPI):
     await init_clients()
     await redis_ping()
+    await recover_orphans()  # §5.1：重启孤儿事件统一置 failed，不自动续跑
     yield
     await close_clients()
     await redis_close()
