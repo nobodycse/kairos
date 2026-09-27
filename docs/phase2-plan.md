@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一代码完成，待服务器验收）**
+> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一/二代码完成，待服务器验收）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -75,15 +75,25 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 4. 阶段二：LangGraph 诊断流 + agent_runner + 落库（约 2-3 天）
 
-**阶段状态：未开始**
+**阶段状态：进行中——代码全部完成（0636524 / 7884fdf / 6ad99b3 / 本提交），待服务器验收**
 
 ### 任务与文件
 
-- [ ] `backend/agent/graph.py`：StateGraph——`collect_evidence`（LLM function calling 循环，iteration≤8）→ `analyze`（structured RCAReport）→ `propose_fix`（structured RemediationPlan）→ `risk_gate`（decide+白名单：AUTO→execute / REQUIRE_APPROVAL→interrupt / FORBIDDEN→failed）；checkpointer=MemorySaver
-- [ ] `backend/agent/runner.py`：`agent_runner.run(fault_event_id)`——Redis 锁 `event:{id}:running NX EX 1800`（§5.5）、状态迁移落库（detected→diagnosing→awaiting_approval…）、异常→failed+audit、启动时孤儿扫描（§5.1）
-- [ ] 接线：`webhooks.py` 三处 TODO 落库后 `create_task` 触发 + `faults.py` diagnose 接口真实触发（409 走 DB）
-- [ ] 落库：RCA → `diagnoses` 表；RemediationPlan → `remediation_actions`（policy 由 decide 决定）；approve/reject 接口改真实 `Command(resume=...)` 恢复（替换 stub）；reject → closed
-- [ ] MemorySaver 挂起：interrupt 时事件置 awaiting_approval
+- [x] `backend/agent/graph.py`：StateGraph——`collect_evidence`（LLM function calling 循环，iteration≤8，循环在节点内；ToolError 回填不炸事件；同工具+同参数证据去重）→ `analyze`（structured RCAReport + §6.4 证据约束重试）→ `propose_fix`（structured RemediationPlan + 参数模型校验）→ 门控拆两节点：`gate_check`（decide+白名单，决策先落 state）→ `REQUIRE_APPROVAL` 时 `gate_wait` interrupt；FORBIDDEN→failed / AUTO→交接，用 `Command(goto)` 路由；checkpointer=MemorySaver（serde 显式 msgpack 白名单注册项目类型）
+- [x] `backend/agent/runner.py`：`trigger`（Redis 锁 `event:{id}:running NX EX 1800`，§5.5）/ `run` / `spawn_resume`（`Command(resume={"approved": bool})`）/ `recover_orphans`（§5.1 启动扫描）；状态迁移、RCA/提案落库、异常→failed+audit、连续失败计数≥5 告警日志全在 runner（图节点不写业务表）
+- [x] `backend/agent/prompts.py`（三节点中文 prompt）+ `backend/agent/events.py`（agent_step/status_changed 发射接缝，阶段二仅日志，阶段三换 Redis pub/sub）
+- [x] 接线：`webhooks.py` created/merged 两处 TODO → `agent_runner.trigger` + `faults.py` diagnose 真实触发（409 细化）+ `main.py` lifespan 孤儿扫描
+- [x] 落库：RCA → `diagnoses`（llm_model/iterations）；RemediationPlan → `remediation_actions`（risk_level/policy 由 decide 派生，status=pending）；approve/reject 补 `approved_by`、审计（actor=user:xxx，comment 入 detail）、`spawn_resume` 恢复（替换 stub）；reject → closed
+- [x] MemorySaver 挂起：interrupt 时事件置 awaiting_approval（先落库后置状态，前端弹框即有数据）
+
+### 落地决策（文档未定处的实现口径）
+
+1. 孤儿清单 = §5.1 的 diagnosing/remediating/verifying **+ awaiting_approval**（MemorySaver 下重启无法 resume，等价孤儿）。
+2. failed 事件允许经 §3.7 重新触发（§5.1"人工可重新触发"；"已结束"仅指 resolved/closed）；awaiting_approval/remediating/verifying/rolling_back 重入 409"该事件正在处理中"（契约两种 409 之外的补充文案）。
+3. `diagnoses.iterations` = AgentState.iteration（工具调用轮数）；`llm_model` = settings.llm_model。
+4. `alert` 字段口径 = fault_events 行字段（alert_name/severity/namespace/workload/labels）。
+5. AUTO 分支当前不可达（RISK_POLICY 无 AUTO 项）；approve 恢复与 AUTO 都走 runner 的 remediating 交接，阶段三 executor 接管。
+6. 锁在 runner 任务结束即释放；awaiting_approval 防重入靠 DB 状态（409），TTL 1800 自然过期兜底。
 
 ### 验收标准
 
@@ -94,7 +104,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 ### 风险
 
 - LangGraph interrupt/checkpointer 是全计划最大风险（见 §7）；MemorySaver 方案回避跨进程恢复。
-- **已探明（本地 3.14 冒烟）**：StateGraph + AgentState reducer + MemorySaver 建图/读写/checkpoint 均正常；但 checkpoint 序列化 pydantic 模型（Evidence 等）会告警 unregistered type，未来版本将阻断——阶段二在 runner 初始化时通过 `allowed_msgpack_modules` 显式注册 agent.schemas 各模型（进程内恢复不受影响，属前瞻加固）。
+- **已探明并落地（本地 3.14 冒烟）**：StateGraph + AgentState reducer + MemorySaver 建图/读写/checkpoint 均正常；checkpoint 序列化 pydantic 模型需显式注册——已在 `graph.py` `_build_checkpointer()` 用 `JsonPlusSerializer(allowed_msgpack_modules=None).with_msgpack_allowlist([...])` 注册项目类型，冒烟验证无告警。另：py3.14 PEP 649 下 `get_type_hints(TypedDict)` 报 NameError（冒烟脚本改读 `__annotations__`）。
 
 ## 5. 阶段三：executor / verification / 回滚 + SSE 真实化（约 2-3 天）
 
@@ -159,4 +169,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 阶段一：8 查询工具 + 修复参数 schema | 5c2c08c | monitoring 加法式小改（labels/EndpointsInfo/parse_quantity 别名） |
 | 2026-09-27 | 阶段一：risk_control 三件套 | 9ec6c2e | RISK_POLICY/decide + whitelist + audit |
 | 2026-09-27 | 阶段一：验收脚本 + 本文档更新 | a209ab5 | 待服务器跑 stage1_check.py 后勾验收项 |
-| 2026-09-27 | 阶段一：本地冒烟脚本（py3.14） | 本次 | 9 项全过；探明 langgraph msgpack 注册事项（见 §4 风险） |
+| 2026-09-27 | 阶段一：本地冒烟脚本（py3.14） | f38670e | 9 项全过；探明 langgraph msgpack 注册事项（见 §4 风险） |
+| 2026-09-27 | 阶段二：graph + prompts + 事件接缝 | 0636524 | 门控拆 gate_check/gate_wait（决策先入 state 再 interrupt） |
+| 2026-09-27 | 阶段二：agent_runner | 7884fdf | trigger/run/spawn_resume/recover_orphans + 落库 |
+| 2026-09-27 | 阶段二：api 接线 | 6ad99b3 | webhook 触发 + diagnose 真实化 + approve/reject 补全 |
+| 2026-09-27 | 阶段二：冒烟+验收脚本+文档 | 本次 | 图冒烟 5 项全过（挂起→恢复两分支）；待服务器 stage2_check |

@@ -1,20 +1,22 @@
-"""诊断图（architecture.md §7.1，阶段二子集：collect → analyze → propose → risk_gate）。
+"""诊断图（architecture.md §7.1，阶段二子集：collect → analyze → propose → gate）。
 
-阶段二不含 execute_fix/verify/rollback 节点（阶段三接在 handoff 之后）：
-- FORBIDDEN / 白名单拒绝 → goto END，runner 按决策置 failed（§5.1）
-- REQUIRE_APPROVAL → interrupt() 挂起，approve/reject 以 Command(resume={"approved": bool})
-  恢复（design §5.2）；恢复后 risk_gate 从头重执行（白名单只读幂等，允许路径无副作用）
-- AUTO / approve → goto END，runner 置 remediating 交接阶段三 executor
+阶段二不含 execute_fix/verify/rollback 节点（阶段三接在 gate 之后）：
+- gate_check：白名单（§11.1）+ decide()（§6.6），决策先落 state 再路由——
+  FORBIDDEN/拒绝 → END（runner 置 failed）；AUTO → END（runner 交接 executor）；
+  REQUIRE_APPROVAL → gate_wait。
+- gate_wait：interrupt() 挂起，approve/reject 以 Command(resume={"approved": bool})
+  恢复（design §5.2）；恢复后 gate_wait 重执行，interrupt 直接返回恢复值，
+  走 END 收尾（approved/rejected 的落库语义在 runner，接口已同步改库）。
 
-图节点不写业务表（落库在 runner），可脱离 DB 测试；风险白名单需要 db session，
+图节点不写业务表（落库在 runner），可脱离 DB 测试；白名单需要 db session，
 在节点内开 SessionLocal。llm / call_tool / whitelist_validate 以模块级名字引用，
 便于冒烟脚本打桩（scripts/smoke_stage2.py）。
 """
 import json
 import time
-from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import ValidationError
@@ -26,7 +28,7 @@ from agent.schemas import Evidence, RemediationPlan, RCAReport
 from agent.state import AgentState
 from agent.tools import REMEDIATION_PARAM_MODELS, ToolError, call_tool, to_openai_specs
 from core.db import SessionLocal
-from risk_control import Policy, decide
+from risk_control import Decision, Policy, RiskLevel, decide
 from risk_control.whitelist import validate as whitelist_validate
 
 MAX_ITERATIONS = 8  # §7.1：工具调用轮次上限
@@ -230,37 +232,60 @@ async def propose_fix(state: AgentState) -> dict:
     return {"plan": plan}
 
 
-# ---------- risk_gate ----------
+# ---------- risk_gate（拆两节点：决策路由 / interrupt 挂起） ----------
 
 
-async def risk_gate(state: AgentState) -> Command:
-    """参数白名单（§11.1，拒绝时自带审计）+ decide()（§6.6）三分支。
+async def gate_check(state: AgentState) -> Command:
+    """参数白名单（§11.1，拒绝时自带审计）+ decide()（§6.6）。
 
-    REQUIRE_APPROVAL 时 interrupt() 挂起；resume 后本节点从头重执行
-    （白名单只读幂等、允许路径不写审计），interrupt 返回恢复值。
+    决策先落 state（interrupt 前可见，runner 据此写 remediation_actions），
+    再按三分支路由：FORBIDDEN/拒绝 → END（runner 置 failed）；AUTO → END
+    （runner 交接 executor）；REQUIRE_APPROVAL → gate_wait。
     """
     plan = state["plan"]
     decision = decide(plan.action)
     async with SessionLocal() as db:
         result = await whitelist_validate(db, plan)
     if not result.allowed or decision.policy == Policy.FORBIDDEN:
-        return Command(update={"risk_decision": decision}, goto=END)  # runner 置 failed
+        return Command(update={"risk_decision": decision}, goto=END)
     if decision.policy == Policy.REQUIRE_APPROVAL:
-        resume: Any = interrupt(
-            {
-                "action": plan.action,
-                "target": plan.target,
-                "params": plan.params,
-                "risk_level": decision.risk_level.value,
-                "reason": plan.reason,
-            }
-        )
-        approved = bool(resume.get("approved")) if isinstance(resume, dict) else bool(resume)
-        return Command(update={"risk_decision": decision}, goto=END)  # approved 与否由 runner 按恢复值落库
-    return Command(update={"risk_decision": decision}, goto=END)  # AUTO：runner 交接 executor
+        return Command(update={"risk_decision": decision}, goto="gate_wait")
+    return Command(update={"risk_decision": decision}, goto=END)  # AUTO
+
+
+async def gate_wait(state: AgentState) -> dict:
+    """interrupt() 挂起点：恢复后本节点重执行，interrupt 直接返回恢复值。
+
+    恢复值 {"approved": bool} 的落库语义由 runner 处理（approve/reject 接口
+    已同步改库，图只负责走完到 END）。
+    """
+    plan = state["plan"]
+    decision = state["risk_decision"]
+    interrupt(
+        {
+            "action": plan.action,
+            "target": plan.target,
+            "params": plan.params,
+            "risk_level": decision.risk_level.value,
+            "reason": plan.reason,
+        }
+    )
+    return {}
 
 
 # ---------- 组图 ----------
+
+
+def _build_checkpointer() -> MemorySaver:
+    """checkpoint 序列化显式白名单（进程内 MemorySaver，跨进程不恢复，§5.1）。
+
+    langgraph 未来版本将阻断未注册类型的 msgpack 反序列化，这里把图状态里
+    的项目类型（pydantic 模型/枚举）注册进 allowlist，升级即不受影响。
+    """
+    serde = JsonPlusSerializer(allowed_msgpack_modules=None).with_msgpack_allowlist(
+        [Evidence, RCAReport, RemediationPlan, Decision, RiskLevel, Policy]
+    )
+    return MemorySaver(serde=serde)
 
 
 def build_graph():
@@ -268,13 +293,15 @@ def build_graph():
     g.add_node("collect_evidence", collect_evidence)
     g.add_node("analyze", analyze)
     g.add_node("propose_fix", propose_fix)
-    g.add_node("risk_gate", risk_gate)
+    g.add_node("gate_check", gate_check)
+    g.add_node("gate_wait", gate_wait)
     g.add_edge(START, "collect_evidence")
     g.add_edge("collect_evidence", "analyze")
     g.add_edge("analyze", "propose_fix")
-    g.add_edge("propose_fix", "risk_gate")
-    # risk_gate 的分支用 Command(goto) 表达，不声明静态出边
-    return g.compile(checkpointer=MemorySaver())
+    g.add_edge("propose_fix", "gate_check")
+    g.add_edge("gate_wait", END)
+    # gate_check 的分支用 Command(goto) 表达，不声明静态出边
+    return g.compile(checkpointer=_build_checkpointer())
 
 
 graph = build_graph()
