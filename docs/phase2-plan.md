@@ -94,6 +94,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 ### 风险
 
 - LangGraph interrupt/checkpointer 是全计划最大风险（见 §7）；MemorySaver 方案回避跨进程恢复。
+- **已探明（本地 3.14 冒烟）**：StateGraph + AgentState reducer + MemorySaver 建图/读写/checkpoint 均正常；但 checkpoint 序列化 pydantic 模型（Evidence 等）会告警 unregistered type，未来版本将阻断——阶段二在 runner 初始化时通过 `allowed_msgpack_modules` 显式注册 agent.schemas 各模型（进程内恢复不受影响，属前瞻加固）。
 
 ## 5. 阶段三：executor / verification / 回滚 + SSE 真实化（约 2-3 天）
 
@@ -157,4 +158,5 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 阶段一：LLM 适配层 + AgentState + schema | 5d39fff | langgraph 依赖同时入 requirements |
 | 2026-09-27 | 阶段一：8 查询工具 + 修复参数 schema | 5c2c08c | monitoring 加法式小改（labels/EndpointsInfo/parse_quantity 别名） |
 | 2026-09-27 | 阶段一：risk_control 三件套 | 9ec6c2e | RISK_POLICY/decide + whitelist + audit |
-| 2026-09-27 | 阶段一：验收脚本 + 本文档更新 | 本次 | 待服务器跑 stage1_check.py 后勾验收项 |
+| 2026-09-27 | 阶段一：验收脚本 + 本文档更新 | a209ab5 | 待服务器跑 stage1_check.py 后勾验收项 |
+| 2026-09-27 | 阶段一：本地冒烟脚本（py3.14） | 本次 | 9 项全过；探明 langgraph msgpack 注册事项（见 §4 风险） |
