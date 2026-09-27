@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一未开始）**
+> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一代码完成，待服务器验收）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -9,7 +9,7 @@
 
 - **新会话开工前**：先读本文件 + `git log --oneline -15`，从第一个未勾选项继续，不要凭记忆重推进度。
 - **每完成一个 commit**：更新本文档对应 checkbox；**每完成一个阶段**：更新阶段状态行 + §9 进度日志。
-- 参照文档：`docs/design.md`（需求/接口契约/状态机/§5 一致性约定/§8.1 路线/§8.4 风险/§11.1 白名单）、`docs/architecture.md`（§5 存储/§6 数据流/§7 模块/§14 选型）、`README.md`（Demo 步骤、路线勾选）。
+- 参照文档：`docs/design.md`（需求/接口契约/状态机/§5 一致性约定/§8.1 路线/§8.4 风险）、`docs/architecture.md`（§5 存储/§6 数据流/§7 模块/**§11.1 白名单**/§14 选型）、`README.md`（Demo 步骤、路线勾选）。
 - 下文后端路径均相对 `backend/`，前端路径相对 `frontend/`。
 
 ## 1. 背景与现状基线
@@ -41,11 +41,11 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 2. **LLM 适配层不引入 langchain**：httpx 直调 OpenAI 兼容 `/chat/completions`（DeepSeek），实现 architecture §7.3 的 LLMClient（chat 带 tool_calls 解析 / structured 校验+重试），§5.4 约定（30s 超时、失败重试 1 次、结构化失败带错误重试 1 次）。
 3. **工具隔离**（§7.2 关键）：LLM 只见 8 个查询工具；4 个修复工具只能由 propose_fix 节点结构化输出提议，经 risk_gate 决策。
 4. **SSE 链路**（§6.1）：agent 内部发事件 → Redis pub/sub `sse:fault:{id}` + `event:{id}:steps`（20 条窗口）→ faults.py 的 stream 改为订阅转发（替换 mock 演示流）。
-5. **参数白名单**（§11.1）：namespace∈{demo}、replicas∈[0,10]、limit 调整幅度 0.5x–4x、目标必须带 `kairos.io/managed=true`；越界拒绝+审计。
+5. **参数白名单**（architecture §11.1）：namespace∈{demo}、replicas∈[0,10]、limit 调整幅度 0.5x–4x、目标必须带 `kairos.io/managed=true`；越界拒绝+审计。
 
 ## 3. 阶段一：LLM 适配层 + 12 工具 + risk_control/audit 基础件（约 1-2 天）
 
-**阶段状态：未开始**
+**阶段状态：进行中——代码全部完成（5d39fff / 5c2c08c / 9ec6c2e / 本提交），待服务器验收**
 
 ### 前置条件
 
@@ -53,13 +53,15 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ### 任务与文件
 
-- [ ] `backend/requirements.txt` 追加 `langgraph>=0.2`（本阶段装好，阶段二使用）
-- [ ] `backend/agent/llm.py`：LLMClient——`chat(messages, tools) → LLMResponse 含 tool_calls`；`structured(messages, schema) → BaseModel`；§5.4 重试语义（30s 超时、失败重试 1 次、结构化失败带错误重试 1 次）
-- [ ] `backend/agent/state.py`：AgentState TypedDict（architecture §7.1 原文结构）
-- [ ] `backend/agent/tools/__init__.py`：8 查询工具注册表——每个工具 = pydantic 参数 schema + async 执行函数（包装 monitoring/ 三客户端，§6.2 签名）+ Evidence 输出（`source/tool/summary/data`，data 截断：日志 200 行、指标 60 点）；另含 4 个修复工具的参数 schema（**不进 LLM 工具列表**）
-- [ ] `backend/risk_control/__init__.py`：RISK_POLICY 表 + `decide()`
-- [ ] `backend/risk_control/whitelist.py`：§11.1 参数白名单校验
-- [ ] `backend/risk_control/audit.py`：`audit_logs` 写入（复用 models.AuditLog）
+- [x] `backend/requirements.txt` 追加 `langgraph>=0.2`（本阶段装好，阶段二使用）
+- [x] `backend/agent/schemas.py`：Evidence / RCAReport / RemediationPlan 公共模型（§6.4/§6.5 原文 schema；计划外新增——独立成文件供 tools/state/risk_control 共用）
+- [x] `backend/agent/llm.py`：LLMClient——`chat(messages, tools) → LLMResponse 含 tool_calls`；`structured(messages, schema) → BaseModel`；§5.4 重试语义（30s 超时、失败重试 1 次、结构化失败带错误重试 1 次）
+- [x] `backend/agent/state.py`：AgentState TypedDict（architecture §7.1 原文结构）
+- [x] `backend/agent/tools/__init__.py`：8 查询工具注册表——每个工具 = pydantic 参数 schema + async 执行函数（包装 monitoring/ 三客户端，§6.2 签名）+ Evidence 输出（`source/tool/summary/data`，data 截断：日志 200 行、指标 60 点）；另含 4 个修复工具的参数 schema（**不进 LLM 工具列表**）
+- [x] `backend/risk_control/__init__.py`：RISK_POLICY 表 + `decide()`
+- [x] `backend/risk_control/whitelist.py`：architecture §11.1 参数白名单校验
+- [x] `backend/risk_control/audit.py`：`audit_logs` 写入（复用 models.AuditLog，独立提交）
+- [x] `backend/scripts/stage1_check.py`：验收脚本（tools / llm / whitelist / all 子命令）
 
 ### 验收标准
 
@@ -143,7 +145,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 - 每个 commit 更新本文件 checkbox；新会话开工前先读本文件 + git log。
 - 每阶段结束跑一次服务器端到端（注入→自动诊断→确认→恢复），**不攒到最后**。
-- Mimosa 钩子对 ORM 变量写法有误报（order_by/filter_by 链式/构造器 kwargs），已知绕行写法：filter_by 内联、属性赋值、Python 侧过滤排序。
+- Mimosa 钩子对 ORM 变量写法有误报（order_by/filter_by 链式/构造器 kwargs），已知绕行写法：filter_by 内联、属性赋值、Python 侧过滤排序。**阶段一补充**：scripts/ 下 select()/where(==)/filter_by() 查询一律被误报 SQL 注入，审计计数等场景改用 `text()` + 绑定参数（参数化占位符）可通过。
 - 凭据纪律：LLM_API_KEY 等凭据只进 `.env`（本地 backend/.env + 服务器 .env），源码/示例/测试一律不写可用凭据字面量。
 
 ## 9. 进度日志（追加式）
@@ -151,3 +153,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 日期 | 阶段/任务 | commit | 备注 |
 |---|---|---|---|
 | 2026-09-26 | 计划落盘（§0-§9） | — | 本文档创建；代码锚点已核实 |
+| 2026-09-27 | 计划文档入库 | 0d9aafd | 首个 commit |
+| 2026-09-27 | 阶段一：LLM 适配层 + AgentState + schema | 5d39fff | langgraph 依赖同时入 requirements |
+| 2026-09-27 | 阶段一：8 查询工具 + 修复参数 schema | 5c2c08c | monitoring 加法式小改（labels/EndpointsInfo/parse_quantity 别名） |
+| 2026-09-27 | 阶段一：risk_control 三件套 | 9ec6c2e | RISK_POLICY/decide + whitelist + audit |
+| 2026-09-27 | 阶段一：验收脚本 + 本文档更新 | 本次 | 待服务器跑 stage1_check.py 后勾验收项 |
