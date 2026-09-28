@@ -12,8 +12,6 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from core.config import settings
-
 T = TypeVar("T", bound=BaseModel)
 
 # 429/5xx/超时类可重试；其余 4xx（配额耗尽 401/403 等）重试无意义，直接抛
@@ -56,6 +54,10 @@ class LLMClient:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+
+    def describe(self) -> str:
+        """人可读标识（系统设置页/日志展示用，不含 key）。"""
+        return f"{self._model} @ {self._base_url}"
 
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
@@ -145,11 +147,3 @@ class LLMClient:
                 continue
             return data
         raise LLMError(f"LLM 调用重试后仍失败：{last_error}")
-
-
-llm = LLMClient(
-    base_url=settings.llm_base_url,
-    api_key=settings.llm_api_key,
-    model=settings.llm_model,
-    timeout=settings.llm_timeout_seconds,
-)

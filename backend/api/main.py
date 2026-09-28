@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import auth, cluster, experiments, faults, reports, webhooks
+from api.routers import auth, cluster, experiments, faults, reports, settings, webhooks
 from agent.runner import recover_orphans
 from core.db import engine
 from core.redis import close as redis_close, ping as redis_ping
@@ -52,5 +52,5 @@ def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
-for _router in (auth, cluster, faults, experiments, reports, webhooks):
+for _router in (auth, cluster, faults, experiments, reports, settings, webhooks):
     app.include_router(_router.router, prefix="/api/v1")

@@ -241,3 +241,18 @@ class ExperimentResult(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=_ts_default()
     )
+
+
+class SystemSetting(Base):
+    """系统内键值配置（Phase 2.5 增补：AI 供应商配置等，管理员在系统设置页维护）。
+
+    value 为 JSONB（如 {"base_url", "api_key", "model"}）；API 层永不回明文 key。
+    """
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=_ts_default()
+    )

@@ -18,13 +18,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import agent.llm as agent_llm  # noqa: E402
 from agent.schemas import RCAReport, RemediationPlan  # noqa: E402
 from agent.tools import QUERY_TOOLS, call_tool, to_openai_specs  # noqa: E402
 from core.config import settings  # noqa: E402
 from core.db import SessionLocal  # noqa: E402
 from monitoring import clients  # noqa: E402
 from risk_control.whitelist import validate  # noqa: E402
+from system_settings import get_llm  # noqa: E402
 
 
 async def _pick_target() -> tuple:
@@ -86,10 +86,12 @@ async def check_tools() -> bool:
 
 
 async def check_llm() -> bool:
-    if not settings.llm_api_key:
-        print("[llm] FAIL：LLM_API_KEY 未配置（backend/.env），无法验收")
+    async with SessionLocal() as db:
+        client = await get_llm(db)
+    if client is None:
+        print("[llm] FAIL：LLM 未配置（系统设置页与 .env 均未配置），无法验收")
         return False
-    print(f"[llm] 供应商：{settings.llm_base_url}  模型：{settings.llm_model}")
+    print(f"[llm] 供应商：{client.describe()}")
     alert = {
         "alertname": "PodOOMKilled",
         "severity": "critical",
@@ -111,7 +113,7 @@ async def check_llm() -> bool:
         },
     ]
     try:
-        rca = await agent_llm.llm.structured(messages, RCAReport)
+        rca = await client.structured(messages, RCAReport)
     except Exception as e:
         print(f"[llm] FAIL：{type(e).__name__}: {e}")
         return False

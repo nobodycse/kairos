@@ -149,7 +149,11 @@ def _cfg(thread: str) -> dict:
 
 async def main() -> None:
     fake = FakeLLM()
-    G.llm = fake
+
+    async def fake_get_llm(db):
+        return fake
+
+    G.get_llm = fake_get_llm
     G.call_tool = fake_call_tool
     G.whitelist_validate = whitelist_ok
     # 阶段三节点打桩

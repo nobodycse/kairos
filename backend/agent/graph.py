@@ -16,7 +16,8 @@
   否则 outcome=failed → END。图内不回边 collect——evidence 是追加式 reducer，
   跨轮重跑会污染上下文，重诊断由 runner 起新线程等价实现（落地决策 §一.9）。
 
-图节点内需要 DB 的操作各自开 SessionLocal；llm / call_tool / whitelist_validate /
+图节点内的 LLM 客户端经 get_llm(db) 动态获取（系统设置页配置优先，.env 兜底）；
+DB 操作各自开 SessionLocal；get_llm / call_tool / whitelist_validate /
 executor / verification 以模块级名字引用，便于冒烟脚本打桩（scripts/smoke_stage*.py）。
 """
 import json
@@ -32,7 +33,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent import events
-from agent.llm import llm
 from agent.prompts import ANALYZE_SYSTEM, COLLECT_SYSTEM, PROPOSE_SYSTEM
 from agent.schemas import Evidence, RemediationPlan, RCAReport
 from agent.state import AgentState
@@ -75,6 +75,8 @@ async def collect_evidence(state: AgentState) -> dict:
     证据去重：同工具+同参数只保留最新一条（architecture §6.4）。
     """
     fault_event_id = state["fault_event_id"]
+    async with SessionLocal() as db:
+        llm_client = await get_llm(db)
     messages: list[dict] = [
         {"role": "system", "content": COLLECT_SYSTEM},
         {"role": "user", "content": _alert_brief(state["alert"]) + "\n\n请开始收集证据，排查该故障。"},
@@ -84,7 +86,7 @@ async def collect_evidence(state: AgentState) -> dict:
     iteration = 0
     while iteration < MAX_ITERATIONS:
         iteration += 1
-        resp = await llm.chat(messages, tools=specs)
+        resp = await llm_client.chat(messages, tools=specs)
         if not resp.tool_calls:
             break
         messages.append(
@@ -151,6 +153,8 @@ async def collect_evidence(state: AgentState) -> dict:
 async def analyze(state: AgentState) -> dict:
     """结构化生成 RCAReport（§6.4：evidence ≥2 条且跨 ≥2 源，不满足带反馈重试 1 次）。"""
     fault_event_id = state["fault_event_id"]
+    async with SessionLocal() as db:
+        llm_client = await get_llm(db)
     grouped: dict[str, list[str]] = {}
     for ev_item in state.get("evidence") or []:
         grouped.setdefault(ev_item.source, []).append(
@@ -166,7 +170,9 @@ async def analyze(state: AgentState) -> dict:
             "content": f"{_alert_brief(state['alert'])}\n\n可用证据：\n{evidence_text}\n\n请输出 RCAReport JSON。",
         },
     ]
-    rca = await llm.structured(messages, RCAReport)
+    async with SessionLocal() as db:
+        llm_client = await get_llm(db)
+    rca = await llm_client.structured(messages, RCAReport)
     if not _rca_evidence_ok(rca):
         messages.append(
             {
@@ -175,7 +181,7 @@ async def analyze(state: AgentState) -> dict:
                            "请从「可用证据」中补齐后重新输出完整 JSON。",
             }
         )
-        rca = await llm.structured(messages, RCAReport)
+        rca = await llm_client.structured(messages, RCAReport)
         if not _rca_evidence_ok(rca):
             sources = {e.source for e in rca.evidence}
             raise RuntimeError(
@@ -205,6 +211,8 @@ async def propose_fix(state: AgentState) -> dict:
     """结构化生成 RemediationPlan（§6.5），params 按修复工具参数模型校验。"""
     fault_event_id = state["fault_event_id"]
     rca = state["rca"]
+    async with SessionLocal() as db:
+        llm_client = await get_llm(db)
     messages: list[dict] = [
         {"role": "system", "content": PROPOSE_SYSTEM},
         {
@@ -217,7 +225,7 @@ async def propose_fix(state: AgentState) -> dict:
             ),
         },
     ]
-    plan = await llm.structured(messages, RemediationPlan)
+    plan = await llm_client.structured(messages, RemediationPlan)
     param_model = REMEDIATION_PARAM_MODELS.get(plan.action)
     if param_model is not None:
         try:
@@ -230,7 +238,7 @@ async def propose_fix(state: AgentState) -> dict:
                                "请修正后重新输出完整 RemediationPlan JSON。",
                 }
             )
-            plan = await llm.structured(messages, RemediationPlan)
+            plan = await llm_client.structured(messages, RemediationPlan)
             param_model.model_validate(plan.params)  # 再失败抛 ValidationError → 事件 failed
     await events.emit_agent_step(
         fault_event_id,

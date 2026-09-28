@@ -139,6 +139,12 @@ async def run_approved(thread: str) -> dict:
 
 
 async def main() -> None:
+    holder = {"client": None}
+
+    async def fake_get_llm(db):
+        return holder["client"]
+
+    G.get_llm = fake_get_llm
     G.whitelist_validate = whitelist_ok
     G.SessionLocal = fake_session
     G.executor_execute = fake_execute
@@ -148,7 +154,7 @@ async def main() -> None:
     # 1) 执行成功 + 验证全过 → resolved
     EXEC["ok"] = WINDOW["passed"] = ROLLBACK["ok"] = True
     EV.reset()
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-1")
     assert r.get("outcome") == "resolved" and EV.status == "verifying", (r.get("outcome"), EV.status)
     print("[1] 执行成功 + 验证全过 → resolved OK")
@@ -156,7 +162,7 @@ async def main() -> None:
     # 2) 验证不过 + 回滚成功 → redo（count 0→1，回 diagnosing）
     WINDOW["passed"] = False
     EV.reset()
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-2")
     assert r.get("outcome") == "redo" and EV.rediagnose_count == 1 and EV.status == "diagnosing", (
         r.get("outcome"), EV.rediagnose_count, EV.status
@@ -165,14 +171,14 @@ async def main() -> None:
 
     # 3) 第二次验证不过 → redo（count 1→2）
     EV.reset(count=1)
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-3")
     assert r.get("outcome") == "redo" and EV.rediagnose_count == 2, (r.get("outcome"), EV.rediagnose_count)
     print("[3] 第二次验证不过 → redo OK（count=2）")
 
     # 4) count 用尽 + 回滚成功 → failed
     EV.reset(count=2)
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-4")
     assert r.get("outcome") == "failed" and EV.rediagnose_count == 2 and EV.status == "rolling_back", (
         r.get("outcome"), EV.rediagnose_count, EV.status
@@ -182,7 +188,7 @@ async def main() -> None:
     # 5) 回滚失败 → failed
     EV.reset()
     ROLLBACK["ok"] = False
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-5")
     assert r.get("outcome") == "failed", r.get("outcome")
     ROLLBACK["ok"] = True
@@ -191,7 +197,7 @@ async def main() -> None:
     # 6) 执行失败 → exec_failed（不进验证窗口）
     EXEC["ok"] = False
     EV.reset()
-    G.llm = FakeLLM()
+    holder["client"] = FakeLLM()
     r = await run_approved("s3-6")
     assert r.get("outcome") == "exec_failed", r.get("outcome")
     EXEC["ok"] = True

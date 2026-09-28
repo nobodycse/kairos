@@ -24,6 +24,7 @@ from core.db import SessionLocal
 from core.redis import r as redis
 from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction
 from risk_control.audit import write_audit
+from system_settings import llm_ready
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,12 @@ async def _run_inner(fault_event_id: int) -> str | None:
         ev = await db.get(FaultEvent, fault_event_id)
         if ev is None:
             logger.warning("run：事件不存在 id=%s", fault_event_id)
+            return None
+        if not await llm_ready(db):
+            # 前置检查（Phase 2.5）：未配置 AI 时直接 failed 并给出可操作提示
+            await _mark_failed(
+                fault_event_id, "LLM 未配置：请在网页「系统设置」中配置 AI 供应商后重新触发诊断"
+            )
             return None
         if ev.status != "diagnosing":
             await events.emit_status_changed(fault_event_id, ev.status, "diagnosing", "agent 开始诊断")
