@@ -1,14 +1,13 @@
 """故障事件：列表 / 详情 / 触发诊断 / SSE 流 / 人工确认（design.md §3.5–§3.8、§4）。
 
-Phase 1：列表/详情接 fault_events 真数据（§3.5/§3.6）；SSE 保持演示序列
-（真实时线 Phase 2 阶段三随 SSE 真实化落地）。Phase 2 阶段二：diagnose 真实
-触发 agent_runner（§5.1/§5.5），approve/reject 补 approved_by/审计并恢复挂起图
-（§5.2）。
+Phase 1：列表/详情接 fault_events 真数据（§3.5/§3.6）；diagnose/approve/reject
+已接 agent_runner（§5.1/§5.2）。阶段三：SSE 真实化——订阅 Redis
+`sse:fault:{id}` 转发 agent 事件（§6.1），snapshot 由 DB+steps 窗口组装（§4.2），
+mock 演示序列不再被引用（mock.py 保留给 experiments/reports stub）。
 
 查询走 ORM 参数化表达式；事件量级小，过滤/排序/分页在 Python 侧完成
 （与 cluster 路由的内存分页风格一致）。
 """
-import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -19,9 +18,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent import runner as agent_runner
-from api import mock
 from api.deps import require_user
 from core.db import get_db
+from core.redis import r as redis
 from core.security import decode_access_token
 from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction, User
 from risk_control.audit import resource_for, write_audit
@@ -280,25 +279,37 @@ async def stream(
     # EventSource 不能设置请求头，JWT 走 query 参数（design.md §4.1）
     if decode_access_token(token) is None:
         raise HTTPException(status_code=401, detail="token 无效或已过期")
-    if await db.get(FaultEvent, fault_id) is None:
+    ev = await db.get(FaultEvent, fault_id)
+    if ev is None:
         raise HTTPException(status_code=404, detail="故障事件不存在")
 
     async def event_stream():
-        # 连接/重连先发 snapshot（design.md §4.2）；Phase 2 接真实 agent 事件
-        yield _sse_frame("snapshot", mock.SSE_SNAPSHOT)
-        # 演示性 agent_step 序列：2s 一帧，tool_start/tool_end 成对（§4.4）
-        for step in mock.SSE_DEMO_STEPS:
-            await asyncio.sleep(2)
-            yield _sse_frame("agent_step", {**step, "fault_event_id": fault_id})
-        await asyncio.sleep(2)
-        yield _sse_frame("status_changed", mock.SSE_STATUS_CHANGED)
-        await asyncio.sleep(2)
-        # 演示 verification_progress 事件类型；真实时序为批准 → verifying 后才有
-        yield _sse_frame("verification_progress", mock.SSE_VERIFICATION)
-        # 15s 注释心跳，防代理断连（§4.1）
-        while True:
-            await asyncio.sleep(15)
-            yield ": ping\n\n"
+        # 连接/重连先发 snapshot（§4.2）：DB 当前状态 + Redis steps 窗口（旧→新，≤20 条）
+        rows = await redis.lrange(f"event:{fault_id}:steps", 0, -1)
+        recent = [json.loads(s) for s in reversed(rows)]
+        yield _sse_frame(
+            "snapshot",
+            {
+                "fault_event_id": fault_id,
+                "status": ev.status,
+                "alert_name": ev.alert_name,
+                "detected_at": ev.detected_at.isoformat() if ev.detected_at else None,
+                "recent_steps": recent,
+            },
+        )
+        # 订阅 agent 事件转发 channel（§6.1）；get_message 15s 超时兼做心跳（§4.1）
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(f"sse:fault:{fault_id}")
+        try:
+            while True:
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0)
+                if msg is None:
+                    yield ": ping\n\n"
+                    continue
+                envelope = json.loads(msg["data"])
+                yield _sse_frame(envelope["event"], envelope["data"])
+        finally:
+            await pubsub.aclose()
 
     return StreamingResponse(
         event_stream(),

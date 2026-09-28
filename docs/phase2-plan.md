@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一/二代码完成，待服务器验收）**
+> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一/二/三代码完成，待服务器验收）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -108,14 +108,27 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 5. 阶段三：executor / verification / 回滚 + SSE 真实化（约 2-3 天）
 
-**阶段状态：未开始**
+**阶段状态：进行中——代码全部完成（31b4bb5 / 68ac5a0 / 1d615eb / 本提交），待服务器验收**
 
 ### 任务与文件
 
-- [ ] `backend/remediation/executor.py`：`execute(plan)`——白名单校验→快照（Deployment 当前资源）→patch 执行→audit；`rollback(plan)`——按快照恢复
-- [ ] `backend/verification/__init__.py`：五项检查（pod_ready / no_restarts / error_rate / p95_latency / logs_clean），3 分钟窗口 30s 采样，每采样点发 SSE `verification_progress`
-- [ ] 状态机：verify 全过 → resolved（resolved_at/mttr）；不过 → rolling_back → rollback → rediagnose_count<2 回 diagnosing，否则 failed
-- [ ] SSE 真实化：agent 发事件进 Redis pub/sub + steps 窗口；`faults.py` stream（L228-247）改订阅转发（snapshot 从 DB+Redis 组装），删除 mock 演示序列依赖
+- [x] `backend/remediation/executor.py`：`execute`——白名单再校验→快照{replicas,image,limits,container}**先落库**→patch（restart=restartedAt 注解/scale=replicas/limits 按 container merge）→before(allowed)/after(success|failure+字段级 diff) 审计；`rollback`——按该 workload 最近 succeeded 行快照恢复；k8s.py 增 `patch_deployment`（patch 而非 replace）
+- [x] `backend/verification/__init__.py`：五项检查（pod_ready / no_restarts（≤基线，容忍滚动更新）/ error_rate<0.05 / p95<2s / logs_clean），6 采样点 ×30s（t=30..180），每点发 `verification_progress`；Prometheus/Loki 软依赖拿不到视为过
+- [x] 状态机：verify 全过 → resolved（runner 写 resolved_at/mttr）；任一采样点不过 → rolling_back → rollback → count<2 回 diagnosing（redo），否则 failed；执行失败 → failed
+- [x] SSE 真实化：events.py Redis 化（publish `sse:fault:{id}` 封格式 {event,data} + steps 窗口 LPUSH/LTRIM 20 条 EXPIRE 86400 + status key，全部 best-effort）；`faults.py` stream 改订阅转发（snapshot 由 DB+steps 组装，get_message 15s 兼心跳），mock 演示序列不再被引用
+
+### 落地决策（文档未定处的实现口径）
+
+1. rollback_deployment 执行语义 = **快照恢复**（该 workload 最近一次 succeeded 行的 snapshot，找不到则执行失败；文档未定义，用户选定）——与自动回滚同一机制。
+2. 验证判定 = **任一采样点任一检查不通过立即回滚**（§6.7"任一不通过"原文）；6 点全过 → resolved（"6 个采样点"即 happy path）。
+3. ExecResult = {success, message}（文档未定义）。
+4. 快照落点 = remediation_actions.snapshot（design DDL；architecture L367"存 fault_event"为文档偏差）。快照先落库再 patch（顺序固化在 executor）。
+5. 审计 before/after：before=allowed（snapshot+params）、after=success/failure（diff 字段级 before/after）。
+6. SSE 封格式 = {"event": <类型>, "data": <§4 payload>}（文档未定义）。
+7. error_rate"呈下降趋势"MVP 不做（只做阈值）。
+8. webhook resolved→提前复查（§6.7 TODO）不在阶段三清单，保留 TODO；与 agent 验证的竞争 MVP 接受。
+9. 图内回边（rollback→collect）改为 runner 重入新线程 `fault-{id}-r{count}`——evidence 追加式 reducer 会跨轮污染，等价实现状态机。
+10. AgentState 增内部通道 `outcome`（resolved/exec_failed/redo/failed）。
 
 ### 验收标准
 
@@ -124,7 +137,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ### 风险
 
-- 回滚依赖快照完整性：快照必须在 patch 前落库（顺序不可颠倒），否则无法恢复。
+- 回滚依赖快照完整性：快照必须在 patch 前落库（顺序不可颠倒），否则无法恢复。——已落地：顺序固化在 executor.execute 内（先 commit 快照再 patch）。
 
 ## 6. 阶段四：前端诊断详情页两轮 + Demo 16 步 + 收尾（约 2 天）
 
@@ -173,4 +186,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 阶段二：graph + prompts + 事件接缝 | 0636524 | 门控拆 gate_check/gate_wait（决策先入 state 再 interrupt） |
 | 2026-09-27 | 阶段二：agent_runner | 7884fdf | trigger/run/spawn_resume/recover_orphans + 落库 |
 | 2026-09-27 | 阶段二：api 接线 | 6ad99b3 | webhook 触发 + diagnose 真实化 + approve/reject 补全 |
-| 2026-09-27 | 阶段二：冒烟+验收脚本+文档 | 本次 | 图冒烟 5 项全过（挂起→恢复两分支）；待服务器 stage2_check |
+| 2026-09-27 | 阶段二：冒烟+验收脚本+文档 | 67258a4 | 图冒烟 5 项全过（挂起→恢复两分支）；待服务器 stage2_check |
+| 2026-09-27 | 阶段三：executor + k8s patch | 31b4bb5 | 快照先落库再 patch；before/after 审计 diff |
+| 2026-09-27 | 阶段三：verification 五项检查 | 68ac5a0 | 6 采样点 ×30s；任一不过即回滚 |
+| 2026-09-27 | 阶段三：图三节点+runner 终态+events Redis 化 | 1d615eb | smoke_stage3 六条终态路径全过 |
+| 2026-09-27 | 阶段三：SSE 订阅转发+验收脚本+文档 | 本次 | 待服务器 stage3_check（happy path 自动；回滚路径手动指引） |
