@@ -193,7 +193,9 @@ async def _get_metrics(args: GetMetricsArgs) -> Evidence:
     now = time.time()
     step = max(DEFAULT_STEP_SECONDS, args.minutes * 60 // MAX_METRIC_POINTS)
     if args.metric in _POD_EXPRS:
-        expr = _POD_EXPRS[args.metric].format(ns=args.namespace, pod=re.escape(args.target))
+        # PromQL 用 RE2：不认 Python re.escape 的 `\-` 转义，还原后再拼
+        pod = re.escape(args.target).replace("\\-", "-")
+        expr = _POD_EXPRS[args.metric].format(ns=args.namespace, pod=pod)
     else:
         expr = _GLOBAL_EXPRS[args.metric]
     series = await clients.prometheus.query_range(expr, now - args.minutes * 60, now, step)

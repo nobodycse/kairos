@@ -109,7 +109,7 @@ async def check_llm() -> bool:
         },
     ]
     try:
-        rca = await agent_llm.structured(messages, RCAReport)
+        rca = await agent_llm.llm.structured(messages, RCAReport)
     except Exception as e:
         print(f"[llm] FAIL：{type(e).__name__}: {e}")
         return False
