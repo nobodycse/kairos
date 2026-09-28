@@ -20,27 +20,28 @@ export interface SseSnapshot {
 
 export type AgentPhase = 'collect_evidence' | 'analyze' | 'propose_fix' | 'execute_fix' | 'verify'
 
-/** tool_start 带 args，tool_end 带 duration_ms/evidence_summary —— discriminated union */
-export interface AgentStepBase {
+/**
+ * agent_step 事件（design.md §4.4 + 阶段三扩展）。
+ * §4.4 契约定义 tool_start（带 args）/ tool_end（带 duration_ms/evidence_summary）成对；
+ * 阶段三在 analyze/propose_fix/execute_fix 相位追加了 note 型步骤
+ * （step=rca_ready/plan_ready/executed 等，无 args/duration_ms），字段按宽松可选建模。
+ */
+export interface AgentStep {
   fault_event_id: number
   iteration: number
-  phase: AgentPhase
-  tool: string
+  phase: AgentPhase | string
+  step: string
+  tool?: string
+  args?: Record<string, unknown>
+  duration_ms?: number
+  evidence_summary?: string
+  /** note 型步骤的载荷（rca_ready 带 summary/confidence，plan_ready 带 action/target） */
+  summary?: string
+  confidence?: number
+  action?: string
+  target?: string
   at: string
 }
-
-export interface AgentStepStart extends AgentStepBase {
-  step: 'tool_start'
-  args: Record<string, unknown>
-}
-
-export interface AgentStepEnd extends AgentStepBase {
-  step: 'tool_end'
-  duration_ms: number
-  evidence_summary: string
-}
-
-export type AgentStep = AgentStepStart | AgentStepEnd
 
 export interface SseStatusChanged {
   fault_event_id: number
@@ -76,6 +77,7 @@ export interface FaultStreamHandlers {
   onAgentStep?: (data: AgentStep) => void
   onStatusChanged?: (data: SseStatusChanged) => void
   onVerificationProgress?: (data: SseVerificationProgress) => void
+  onOpen?: () => void
   onError?: () => void
 }
 
@@ -94,6 +96,10 @@ export function connectFaultStream(faultId: number, handlers: FaultStreamHandler
     } catch {
       return null
     }
+  }
+
+  es.onopen = () => {
+    handlers.onOpen?.()
   }
 
   es.addEventListener('snapshot', (e) => {

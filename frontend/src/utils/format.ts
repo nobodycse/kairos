@@ -38,6 +38,22 @@ export const SOURCE_LABELS: Record<string, string> = {
   events: 'K8s Events',
 }
 
+/** 证据来源着色（诊断页证据链/时间线共用） */
+export function sourceTag(source: string): TagType {
+  switch (source) {
+    case 'k8s_api':
+      return 'primary'
+    case 'prometheus':
+      return 'warning'
+    case 'loki':
+      return 'success'
+    case 'events':
+      return 'danger'
+    default:
+      return 'info'
+  }
+}
+
 export const FAULT_TYPE_LABELS: Record<string, string> = {
   oom: '内存溢出 (OOM)',
   cpu_overload: 'CPU 过载',

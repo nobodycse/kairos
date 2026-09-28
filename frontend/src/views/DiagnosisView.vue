@@ -1,94 +1,193 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getFault, type FaultDetail } from '@/services/faults'
-import {
-  connectFaultStream,
-  type AgentStep,
-  type SseSnapshot,
-  type SseStatusChanged,
-  type SseVerificationProgress,
-} from '@/services/sse'
+import { getFault, type FaultDetail, type FaultStatus } from '@/services/faults'
+import { connectFaultStream, type AgentStep } from '@/services/sse'
 import {
   ACTION_LABELS,
   FAULT_STATUS_LABELS,
   PHASE_LABELS,
+  REMEDIATION_STATUS_LABELS,
   SOURCE_LABELS,
   faultStatusTag,
   formatDuration,
   formatPercent,
   formatTime,
+  remediationStatusTag,
   riskTag,
   severityTag,
+  sourceTag,
 } from '@/utils/format'
 
-// Phase 0 壳：详情卡片 + SSE 原始事件日志；时间线组件/确认弹窗 Phase 2 再做
+// 阶段四一轮：结构化时间线（按 iteration 分组、tool_start/end 成对，§4.4）+
+// RCA/证据链强化 + 状态实时流转；确认弹窗在二轮（commit 2）接入
 const route = useRoute()
 const faultId = computed(() => Number(route.params.faultId))
 
 const loading = ref(true)
 const fault = ref<FaultDetail | null>(null)
-
-interface LogEntry {
-  seq: number
-  event: string
-  time: string
-  text: string
-}
-
-const logs = ref<LogEntry[]>([])
 const sseStatus = ref<'connecting' | 'open' | 'closed'>('connecting')
 let seq = 0
 let stream: { close: () => void } | null = null
 
-function pushLog(event: string, time: string, text: string) {
-  logs.value.push({ seq: ++seq, event, time: formatTime(time), text })
+// ---------- 时间线数据模型 ----------
+
+interface ToolEntry {
+  name: string
+  args?: Record<string, unknown>
+  durationMs?: number
+  summary?: string
+  error?: string
 }
 
-function describeStep(step: AgentStep): string {
-  const phase = PHASE_LABELS[step.phase] ?? step.phase
-  if (step.step === 'tool_start') {
-    const args = Object.entries(step.args)
-      .map(([k, v]) => `${k}=${String(v)}`)
-      .join(', ')
-    return `迭代 ${step.iteration} · ${phase} · 调用 ${step.tool}(${args})`
+interface StepGroup {
+  phase: string
+  iteration: number
+  at: string
+  tools: ToolEntry[]
+  notes: string[]
+}
+
+type TimelineItem =
+  | { seq: number; kind: 'snapshot'; at: string; status: string; count: number }
+  | { seq: number; kind: 'status'; at: string; from: string; to: string; reason: string }
+  | { seq: number; kind: 'verify'; at: string; sample: number; of: number; allPassed: boolean; checks: SseCheckView }
+  | { seq: number; kind: 'group'; at: string; group: StepGroup }
+
+interface SseCheckView {
+  pod_ready: boolean
+  no_restarts: boolean
+  error_rate: { value?: number; ok: boolean }
+  p95_latency: { value?: number; ok: boolean }
+  logs_clean: boolean
+}
+
+const entries = ref<TimelineItem[]>([])
+
+const NOTE_LABELS: Record<string, string> = {
+  rca_ready: '根因分析完成',
+  plan_ready: '修复方案已生成',
+  executed: '修复执行结果',
+  execute_failed: '修复执行失败',
+}
+
+function statusLabel(status: string): string {
+  return FAULT_STATUS_LABELS[status as FaultStatus] ?? status
+}
+
+type TimelineTagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
+
+function itemType(item: TimelineItem): TimelineTagType {
+  if (item.kind === 'status') return faultStatusTag(item.to)
+  if (item.kind === 'verify') return item.allPassed ? 'success' : 'warning'
+  if (item.kind === 'group') return 'primary'
+  return 'info'
+}
+
+function findGroup(phase: string, iteration: number, at: string): StepGroup {
+  for (let i = entries.value.length - 1; i >= 0; i--) {
+    const it = entries.value[i]
+    if (it.kind === 'group' && it.group.phase === phase && it.group.iteration === iteration) {
+      return it.group
+    }
   }
-  return `迭代 ${step.iteration} · ${phase} · ${step.tool} 完成（${step.duration_ms}ms）→ ${step.evidence_summary}`
+  const group: StepGroup = { phase, iteration, at, tools: [], notes: [] }
+  entries.value.push({ seq: ++seq, kind: 'group', at, group })
+  return group
 }
 
-function snapshotText(data: SseSnapshot): string {
-  return `当前状态 ${FAULT_STATUS_LABELS[data.status as keyof typeof FAULT_STATUS_LABELS] ?? data.status}，最近步骤 ${data.recent_steps.length} 条`
+/** agent_step → 时间线（tool_start/end 成对合并；note 型并入 notes） */
+function applyStep(step: AgentStep) {
+  const group = findGroup(step.phase, step.iteration, step.at)
+  if (step.step === 'tool_start') {
+    group.tools.push({ name: step.tool ?? '?', args: step.args })
+    return
+  }
+  if (step.step === 'tool_end') {
+    const open = [...group.tools]
+      .reverse()
+      .find((t) => t.name === step.tool && t.durationMs === undefined && t.summary === undefined)
+    if (open) {
+      open.durationMs = step.duration_ms
+      open.summary = step.evidence_summary
+    } else {
+      group.tools.push({ name: step.tool ?? '?', durationMs: step.duration_ms, summary: step.evidence_summary })
+    }
+    return
+  }
+  // note 型（阶段三扩展：rca_ready / plan_ready / executed / execute_failed）
+  if (step.tool && step.evidence_summary) {
+    group.tools.push({
+      name: step.tool,
+      durationMs: step.duration_ms,
+      summary: step.evidence_summary,
+      error: step.step === 'execute_failed' ? step.evidence_summary : undefined,
+    })
+  }
+  if (step.summary) {
+    const conf = step.confidence !== undefined ? `（置信度 ${formatPercent(step.confidence)}）` : ''
+    group.notes.push(`${NOTE_LABELS[step.step] ?? step.step}：${step.summary}${conf}`)
+  } else if (step.action) {
+    group.notes.push(`${NOTE_LABELS[step.step] ?? step.step}：${ACTION_LABELS[step.action] ?? step.action} → ${step.target ?? ''}`)
+  }
 }
 
-function statusText(data: SseStatusChanged): string {
-  const from = FAULT_STATUS_LABELS[data.from as keyof typeof FAULT_STATUS_LABELS] ?? data.from
-  const to = FAULT_STATUS_LABELS[data.to as keyof typeof FAULT_STATUS_LABELS] ?? data.to
-  return `${from} → ${to}：${data.reason}`
+// ---------- 展示辅助 ----------
+
+function paramBrief(obj: Record<string, unknown> | undefined, limit = 120): string {
+  if (!obj) return '-'
+  const text = Object.entries(obj)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .join(', ')
+  return text ? (text.length > limit ? `${text.slice(0, limit)}…` : text) : '-'
 }
 
-function verificationText(data: SseVerificationProgress): string {
-  const failed = Object.entries(data.checks)
-    .filter(([, v]) => (typeof v === 'boolean' ? !v : !v.ok))
-    .map(([k]) => k)
-  const base = `验证采样 ${data.sample}/${data.of}，${data.all_passed ? '全部通过' : '未全部通过'}`
-  return failed.length > 0 ? `${base}（未过项：${failed.join('、')}）` : base
+function dataBrief(data: Record<string, unknown>, limit = 90): string {
+  const text = JSON.stringify(data)
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
+
+// ---------- SSE ----------
 
 function connectStream() {
   stream?.close()
-  logs.value = []
+  entries.value = []
   seq = 0
   sseStatus.value = 'connecting'
   stream = connectFaultStream(faultId.value, {
-    onSnapshot: (d) => pushLog('snapshot', d.detected_at, snapshotText(d)),
-    onAgentStep: (d) => pushLog('agent_step', d.at, describeStep(d)),
-    onStatusChanged: (d) => pushLog('status_changed', d.at, statusText(d)),
-    onVerificationProgress: (d) => pushLog('verification_progress', d.at, verificationText(d)),
+    onOpen: () => {
+      sseStatus.value = 'open'
+    },
+    onSnapshot: (d) => {
+      // 断线重连会重发 snapshot：重置时间线后回放最近步骤（≤20 条，§4.2）
+      if (fault.value && fault.value.id === d.fault_event_id) {
+        fault.value.status = d.status as FaultStatus
+      }
+      entries.value = [{ seq: ++seq, kind: 'snapshot', at: d.detected_at, status: d.status, count: d.recent_steps.length }]
+      for (const s of d.recent_steps) applyStep(s)
+    },
+    onAgentStep: (d) => applyStep(d),
+    onStatusChanged: (d) => {
+      if (fault.value && fault.value.id === d.fault_event_id) {
+        fault.value.status = d.to as FaultStatus
+      }
+      entries.value.push({ seq: ++seq, kind: 'status', at: d.at, from: d.from, to: d.to, reason: d.reason })
+    },
+    onVerificationProgress: (d) => {
+      entries.value.push({
+        seq: ++seq,
+        kind: 'verify',
+        at: d.at,
+        sample: d.sample,
+        of: d.of,
+        allPassed: d.all_passed,
+        checks: d.checks,
+      })
+    },
     onError: () => {
       sseStatus.value = 'closed'
     },
   })
-  sseStatus.value = 'open'
 }
 
 async function fetchDetail() {
@@ -156,16 +255,16 @@ onBeforeUnmount(() => {
           <el-descriptions-item label="模型">{{ fault.diagnosis.llm_model }}（{{ fault.diagnosis.iterations }} 轮迭代）</el-descriptions-item>
           <el-descriptions-item label="分析时间">{{ formatTime(fault.diagnosis.created_at) }}</el-descriptions-item>
         </el-descriptions>
-        <div class="evidence">
-          <el-tag
-            v-for="(e, i) in fault.diagnosis.evidence"
-            :key="i"
-            class="evidence-item"
-            type="info"
-            effect="plain"
-          >
-            {{ SOURCE_LABELS[e.source] ?? e.source }}：{{ e.summary }}
-          </el-tag>
+        <div class="evidence-title">证据链（{{ fault.diagnosis.evidence.length }} 条）</div>
+        <div class="evidence-list">
+          <div v-for="(e, i) in fault.diagnosis.evidence" :key="i" class="evidence-row">
+            <el-tag :type="sourceTag(e.source)" size="small" effect="plain">
+              {{ SOURCE_LABELS[e.source] ?? e.source }}
+            </el-tag>
+            <span class="mono evidence-tool">{{ e.tool }}</span>
+            <span class="evidence-summary">{{ e.summary }}</span>
+            <span class="evidence-data mono">{{ dataBrief(e.data) }}</span>
+          </div>
         </div>
       </template>
 
@@ -183,26 +282,84 @@ onBeforeUnmount(() => {
             <el-tag :type="riskTag(r.risk_level)" size="small">{{ r.risk_level }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="策略">{{ r.policy }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="remediationStatusTag(r.status)" size="small">{{ REMEDIATION_STATUS_LABELS[r.status] }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="参数" :span="2">
+            <span class="mono">{{ paramBrief(r.params) }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="执行快照" :span="2">
+            <span class="mono">{{ r.snapshot ? paramBrief(r.snapshot) : '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="执行时间">{{ formatTime(r.executed_at) }}</el-descriptions-item>
         </el-descriptions>
         <el-alert
           type="warning"
           :closable="false"
           show-icon
-          title="人工确认弹窗（approve / reject 交互）在 Phase 2 实现"
+          title="人工确认弹窗（approve / reject 交互）在阶段四二轮接入"
         />
       </template>
     </el-card>
 
     <el-card shadow="never" class="mt16">
-      <template #header>实时诊断流（SSE，含 15s 心跳保活）</template>
-      <el-empty v-if="logs.length === 0" description="等待事件…" :image-size="60" />
-      <div v-else class="logs">
-        <div v-for="log in logs" :key="log.seq" class="log-line">
-          <span class="log-seq">#{{ log.seq }}</span>
-          <el-tag size="small" effect="plain">{{ log.event }}</el-tag>
-          <span class="log-time">{{ log.time }}</span>
-          <span class="log-text">{{ log.text }}</span>
-        </div>
+      <template #header>诊断时间线（SSE 实时，断线自动重连并回放最近步骤）</template>
+      <el-empty v-if="entries.length === 0" description="等待事件…" :image-size="60" />
+      <div v-else class="timeline-wrap">
+        <el-timeline>
+          <el-timeline-item
+            v-for="item in entries"
+            :key="item.seq"
+            :timestamp="formatTime(item.at)"
+            placement="top"
+            :type="itemType(item)"
+          >
+            <template v-if="item.kind === 'snapshot'">
+              <span class="tl-title">连接 / 重连</span>
+              <span class="tl-sub ml8">当前状态 {{ statusLabel(item.status) }}，回放最近 {{ item.count }} 条步骤</span>
+            </template>
+            <template v-else-if="item.kind === 'status'">
+              <span class="tl-title">状态流转</span>
+              <el-tag :type="faultStatusTag(item.to)" size="small" class="ml8">
+                {{ statusLabel(item.from) }} → {{ statusLabel(item.to) }}
+              </el-tag>
+              <div class="tl-sub">{{ item.reason }}</div>
+            </template>
+            <template v-else-if="item.kind === 'verify'">
+              <span class="tl-title">验证采样 {{ item.sample }}/{{ item.of }}</span>
+              <el-tag :type="item.allPassed ? 'success' : 'danger'" size="small" class="ml8">
+                {{ item.allPassed ? '全部通过' : '未全部通过' }}
+              </el-tag>
+              <div class="checks">
+                <el-tag size="small" effect="plain" :type="item.checks.pod_ready ? 'success' : 'danger'">pod_ready</el-tag>
+                <el-tag size="small" effect="plain" :type="item.checks.no_restarts ? 'success' : 'danger'">no_restarts</el-tag>
+                <el-tag size="small" effect="plain" :type="item.checks.error_rate.ok ? 'success' : 'danger'">
+                  error_rate={{ item.checks.error_rate.value ?? '-' }}
+                </el-tag>
+                <el-tag size="small" effect="plain" :type="item.checks.p95_latency.ok ? 'success' : 'danger'">
+                  p95_latency={{ item.checks.p95_latency.value ?? '-' }}s
+                </el-tag>
+                <el-tag size="small" effect="plain" :type="item.checks.logs_clean ? 'success' : 'danger'">logs_clean</el-tag>
+              </div>
+            </template>
+            <template v-else>
+              <div class="tl-title">
+                <el-tag size="small" effect="plain">{{ PHASE_LABELS[item.group.phase] ?? item.group.phase }}</el-tag>
+                <span class="ml8">迭代 {{ item.group.iteration }}</span>
+              </div>
+              <div v-if="item.group.notes.length" class="tl-notes">
+                <div v-for="(n, i) in item.group.notes" :key="i">{{ n }}</div>
+              </div>
+              <div v-for="(t, i) in item.group.tools" :key="`t${i}`" class="tl-tool">
+                <span class="mono tool-name">{{ t.name }}</span>
+                <span v-if="t.args" class="mono tl-args">{{ paramBrief(t.args, 80) }}</span>
+                <el-tag v-if="t.durationMs !== undefined" size="small" effect="plain">{{ t.durationMs }}ms</el-tag>
+                <div v-if="t.summary" class="tl-sub">{{ t.summary }}</div>
+                <div v-if="t.error" class="tl-sub tl-error">{{ t.error }}</div>
+              </div>
+            </template>
+          </el-timeline-item>
+        </el-timeline>
       </div>
     </el-card>
   </div>
@@ -233,17 +390,39 @@ onBeforeUnmount(() => {
   color: #303133;
 }
 
-.evidence {
+.evidence-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #909399;
+}
+
+.evidence-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
 }
 
-.evidence-item {
-  height: auto;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  white-space: normal;
+.evidence-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.evidence-tool {
+  color: #606266;
+}
+
+.evidence-summary {
+  color: #303133;
+}
+
+.evidence-data {
+  color: #c0c4cc;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mb16 {
@@ -254,32 +433,61 @@ onBeforeUnmount(() => {
   margin-top: 16px;
 }
 
-.logs {
-  max-height: 420px;
+.timeline-wrap {
+  max-height: 560px;
   overflow-y: auto;
+  padding: 4px 8px 4px 4px;
+}
+
+.tl-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.tl-sub {
+  font-size: 13px;
+  color: #606266;
+}
+
+.tl-error {
+  color: #f56c6c;
+}
+
+.tl-notes {
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #303133;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
-.log-line {
+.tl-tool {
+  margin-top: 6px;
+  font-size: 13px;
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 8px;
-  font-size: 13px;
 }
 
-.log-seq {
-  color: #c0c4cc;
-  min-width: 36px;
+.tool-name {
+  color: #409eff;
 }
 
-.log-time {
+.tl-args {
   color: #909399;
   font-size: 12px;
 }
 
-.log-text {
-  color: #303133;
+.checks {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 </style>
