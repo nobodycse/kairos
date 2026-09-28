@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一/二/三代码完成，待服务器验收）**
+> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一~四代码与文档全部完成；待服务器验收 + Demo 走通后收官）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -141,19 +141,19 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 6. 阶段四：前端诊断详情页两轮 + Demo 16 步 + 收尾（约 2 天）
 
-**阶段状态：未开始**
+**阶段状态：进行中——代码与文档全部完成（c5aa4bd / a50287e / 本提交），待服务器跑通 Demo 后收官**
 
 ### 任务与文件
 
-- [ ] 一轮（只读）：`DiagnosisView.vue` 增加 el-timeline 时间线组件（按 iteration 分组、tool_start/end 成对渲染，替换现有原始日志列表）；RCA 卡片/证据链展示强化
-- [ ] 二轮（交互）：`status_changed.to==awaiting_approval` → 确认弹窗（RCA + 方案参数 diff + 风险等级 + comment 输入）→ `approveRemediation` / `rejectRemediation`（`services/faults.ts` 已封装）→ 状态实时流转
-- [ ] 服务器跑通 **README 16 步 Demo** 全流程（注入 OOM → 自动诊断 → 确认 → 执行 → 验证 → 恢复）
+- [x] 一轮（只读）：`DiagnosisView.vue` 原始日志列表替换为 el-timeline（agent_step 按 iteration+phase 分组、tool_start/end 成对合并；analyze/propose/execute 的 note 型步骤并入 notes；status_changed 里程碑着色；verification_progress 五检查 tag 化；snapshot 重连重置回放 ≤20 条）；RCA 证据链按 source 着色条目化，修复动作区补状态/参数/快照/执行时间；`sse.ts` AgentStep 放宽为宽松字段（兼容阶段三 note 型）+ onOpen 回调；状态实时回写提前到一轮落地
+- [x] 二轮（交互）：`status_changed.to==awaiting_approval` → 重拉详情 → 确认弹窗（RCA 摘要 + 提案参数 + 风险等级 + comment 输入）→ `approveRemediation` / `rejectRemediation` → 状态实时流转；修复动作区 pending 提案常驻"人工确认"按钮兜底；409/竞态降级为刷新详情
+- [ ] 服务器跑通 **README 16 步 Demo** 全流程（注入 OOM → 自动诊断 → 确认 → 执行 → 验证 → 恢复）——操作指引已写入 README Demo 章节（真实 OOM 注入 + 人工确认 + 验证采样 + 回滚演示），push 部署后执行
 
 ### 收尾清单
 
-- [ ] design.md §8.1 Phase 2 状态注记
-- [ ] README Phase 4/5 勾选
-- [ ] phase2-plan.md 全部勾选
+- [x] design.md §8.1 Phase 2 状态注记（✅ 已完成（2026-09），沿用 Phase 1 先例）
+- [x] README Phase 4/5 勾选（Phase 6 四项已由阶段三交付，一并勾选并注记）
+- [x] phase2-plan.md 全部勾选（仅剩 Demo 走通 / 录制演示两项，随服务器执行勾选）
 - [ ] （可选）录制演示
 
 ## 7. 风险与预案（design.md §8.4）
@@ -190,4 +190,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 阶段三：executor + k8s patch | 31b4bb5 | 快照先落库再 patch；before/after 审计 diff |
 | 2026-09-27 | 阶段三：verification 五项检查 | 68ac5a0 | 6 采样点 ×30s；任一不过即回滚 |
 | 2026-09-27 | 阶段三：图三节点+runner 终态+events Redis 化 | 1d615eb | smoke_stage3 六条终态路径全过 |
-| 2026-09-27 | 阶段三：SSE 订阅转发+验收脚本+文档 | 本次 | 待服务器 stage3_check（happy path 自动；回滚路径手动指引） |
+| 2026-09-27 | 阶段三：SSE 订阅转发+验收脚本+文档 | 37e79d6 | 待服务器 stage3_check（happy path 自动；回滚路径手动指引） |
+| 2026-09-27 | 阶段四：诊断页时间线 + RCA 强化 | c5aa4bd | npm build 门禁通过；sse.ts 类型放宽 + onOpen |
+| 2026-09-27 | 阶段四：确认弹窗 + 实时流转 | a50287e | ElDialog 首例；pending 提案常驻入口兜底 |
+| 2026-09-27 | 阶段四：README 指引/勾选 + §8.1 注记 | 本次 | 待服务器走通 16 步 Demo 后勾最后两项，Phase 2 收官 |

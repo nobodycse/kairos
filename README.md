@@ -749,26 +749,26 @@ ai-k8s-ops/
 
 ## Phase 4：AI Agent
 
-- [ ] 接入大语言模型
-- [ ] 实现 Tool Calling
-- [ ] 实现 Kubernetes Tools
-- [ ] 实现故障诊断 Agent
-- [ ] 实现 Evidence-based RCA
+- [x] 接入大语言模型
+- [x] 实现 Tool Calling
+- [x] 实现 Kubernetes Tools
+- [x] 实现故障诊断 Agent
+- [x] 实现 Evidence-based RCA
 
 ## Phase 5：自动修复
 
-- [ ] 实现修复方案生成
-- [ ] 实现风险评估
-- [ ] 实现人工确认机制
-- [ ] 实现自动执行
-- [ ] 实现操作审计
+- [x] 实现修复方案生成
+- [x] 实现风险评估
+- [x] 实现人工确认机制
+- [x] 实现自动执行
+- [x] 实现操作审计
 
 ## Phase 6：闭环自愈
 
-- [ ] 修复结果验证
-- [ ] 自动回滚
-- [ ] 多轮重新诊断
-- [ ] 故障处理记录
+- [x] 修复结果验证（五项检查观察窗口，Phase 2 阶段三交付）
+- [x] 自动回滚（按执行前快照恢复，Phase 2 阶段三交付）
+- [x] 多轮重新诊断（回滚后重入新线程，上限 2 次，Phase 2 阶段三交付）
+- [x] 故障处理记录（audit_logs 全量写操作 + 执行前后快照 diff）
 
 ## Phase 7：故障实验室
 
@@ -856,6 +856,41 @@ ai-k8s-ops/
 
 ⑯ 生成故障分析报告
 ```
+
+### 实际操作指引（Phase 2 起可用）
+
+①-⑯ 是演示叙事；实际操作按下面四段进行（前置：服务器 `docker compose up -d` 且 `/health` 正常，`.env` 已配 `LLM_API_KEY`）。
+
+**注入与自动诊断（①-⑪）**
+
+```bash
+# 触发真实 OOM：payment-service 申请超出 limit（512Mi）的内存，容器被 OOMKill
+kubectl -n demo exec deploy/payment-service -- curl -s -X POST \
+  "http://localhost:8000/internal/consume-memory?bytes=1200000000"
+```
+
+- 观察：Prometheus 告警 → Alertmanager → webhook，事件出现在前端「故障事件」列表（detected → diagnosing）；
+- 打开前端诊断详情页：时间线实时滚动 agent_step（查 Pod/事件/日志/指标，按迭代分组），RCA 与提案落库 `diagnoses` / `remediation_actions`。
+
+**人工确认（⑫）**
+
+- 事件变 `awaiting_approval` 时诊断页自动弹出确认框（RCA 摘要 + 提案参数 + 风险等级），填备注后点「批准」；
+- 错过弹窗/刷新页面时，用「修复动作」区的「人工确认」按钮；API 等价 `POST /api/v1/remediations/{id}/approve`（`comment` 可选）。
+
+**执行与验证（⑬-⑮）**
+
+- approve 后自动执行修复（执行前快照先落库）→ remediating → verifying；
+- 时间线出现 6 个验证采样点（30s 一个：pod_ready / no_restarts / error_rate / p95_latency / logs_clean）→ 全过后 `status_changed → resolved`（MTTR 落库，audit 留执行前后 diff）。
+
+**回滚演示（可选，⑭ 异常分支）**
+
+```bash
+kubectl -n demo set image deploy/payment-service app=nginx:1.99   # 不存在的 tag
+# 再次注入 OOM 告警并批准修复：执行成功但 Pod 起不来 → 验证不过
+# → 自动回滚（快照恢复镜像/副本）→ 重诊断 2 次 → 事件 failed，audit 留 rollback 记录
+```
+
+脚本化验收：`docker compose exec backend python scripts/stage1_check.py all` / `stage2_check.py` / `stage3_check.py`。
 
 ---
 
