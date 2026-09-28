@@ -43,6 +43,7 @@ from risk_control import Decision, Policy, RiskLevel, decide
 from risk_control.whitelist import validate as whitelist_validate
 from remediation.executor import execute as executor_execute
 from remediation.executor import rollback as executor_rollback
+from system_settings import get_llm
 from verification import run_window
 
 MAX_ITERATIONS = 8  # §7.1：工具调用轮次上限
