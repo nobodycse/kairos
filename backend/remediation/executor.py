@@ -70,9 +70,11 @@ def _patch_body(plan) -> dict[str, Any]:
     if plan.action == "scale_deployment":
         return {"spec": {"replicas": int(plan.params["replicas"])}}
     if plan.action == "update_resource_limit":
+        # 参数名 → K8s 资源名（limits 的键必须是 cpu/memory）
+        resource_keys = {"cpu_limit": "cpu", "memory_limit": "memory"}
         limits = {
-            k: plan.params[k]
-            for k in ("cpu_limit", "memory_limit")
+            resource_keys[k]: plan.params[k]
+            for k in resource_keys
             if plan.params.get(k)
         }
         return {
