@@ -53,6 +53,12 @@ const router = createRouter({
           component: () => import('@/views/HistoryView.vue'),
           meta: { title: '历史与报告' },
         },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/SettingsView.vue'),
+          meta: { title: '系统设置' },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: { name: 'dashboard' } },
