@@ -34,3 +34,12 @@ async def emit_status_changed(fault_event_id: int, frm: str, to: str, reason: st
         "at": _now_iso(),
     }
     logger.info("status_changed %s", json.dumps(frame, ensure_ascii=False))
+
+
+async def emit_verification_progress(fault_event_id: int, payload: dict) -> None:
+    """发 verification_progress 事件（§4.5）。
+
+    只走广播流，不入 steps 窗口（recent_steps 仅收 agent_step，§4.2）。
+    """
+    frame = {"fault_event_id": fault_event_id, **payload, "at": _now_iso()}
+    logger.info("verification_progress %s", json.dumps(frame, ensure_ascii=False))
