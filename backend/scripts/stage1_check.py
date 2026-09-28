@@ -69,11 +69,13 @@ async def check_tools() -> bool:
                 ok = False
                 note += " 超过 200 行截断上限！"
         if name == "get_metrics":
-            points = ev.data.get("points") or 0
-            note = f"series={ev.data.get('series_count')} points={points}"
-            if points > 60:
+            series = ev.data.get("series") or []
+            max_series_points = max((len(s.get("points") or []) for s in series), default=0)
+            note = f"series={ev.data.get('series_count')} total_points={ev.data.get('points')}(max/series={max_series_points})"
+            # 60 点上限是"每条序列"截断（多 Pod 多序列，总数会超）
+            if max_series_points > 60:
                 ok = False
-                note += " 超过 60 点截断上限！"
+                note += " 单序列超过 60 点截断上限！"
         print(f"[tools] OK   {name}：{ev.summary}（{note or f'data keys: {sorted(ev.data.keys())}'}）")
     specs = to_openai_specs()
     if len(specs) != len(QUERY_TOOLS) or len(QUERY_TOOLS) != 8:
