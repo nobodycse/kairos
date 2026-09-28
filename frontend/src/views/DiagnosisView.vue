@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getFault, type FaultDetail, type FaultStatus } from '@/services/faults'
-import { connectFaultStream, type AgentStep } from '@/services/sse'
+import { ElMessage } from 'element-plus'
+import {
+  approveRemediation,
+  getFault,
+  rejectRemediation,
+  type FaultDetail,
+  type FaultStatus,
+  type Remediation,
+} from '@/services/faults'
+import { connectFaultStream, type AgentStep, type SseStatusChanged } from '@/services/sse'
 import {
   ACTION_LABELS,
   FAULT_STATUS_LABELS,
@@ -149,6 +157,62 @@ function dataBrief(data: Record<string, unknown>, limit = 90): string {
 
 // ---------- SSE ----------
 
+// 阶段四二轮：确认弹窗（§4.3 to==awaiting_approval 弹框，数据从 §3.6 详情刷新）
+const confirmVisible = ref(false)
+const confirmRem = ref<Remediation | null>(null)
+const comment = ref('')
+const submitting = ref(false)
+
+/** 待确认提案（弹窗数据源 + 修复动作区常驻入口） */
+const pendingRem = computed(() => fault.value?.remediations?.find((r) => r.status === 'pending') ?? null)
+
+async function refreshThenConfirm() {
+  await fetchDetail()
+  const rem = pendingRem.value
+  if (!rem) {
+    ElMessage.info('当前没有待确认的修复提案')
+    return
+  }
+  confirmRem.value = rem
+  comment.value = ''
+  confirmVisible.value = true
+}
+
+async function submitDecision(action: 'approve' | 'reject') {
+  const rem = confirmRem.value
+  if (!rem || submitting.value) return
+  submitting.value = true
+  try {
+    const resp =
+      action === 'approve'
+        ? await approveRemediation(rem.id, comment.value || undefined)
+        : await rejectRemediation(rem.id, comment.value || undefined)
+    ElMessage.success(action === 'approve' ? '已批准，修复开始执行' : '已拒绝，事件关闭')
+    confirmVisible.value = false
+    if (fault.value) fault.value.status = resp.fault_event_status as FaultStatus
+    await fetchDetail()
+  } catch {
+    // request.ts 已弹出错误文案；409（提案已被处理/事件已流转）→ 刷新详情对齐状态
+    await fetchDetail()
+    if (!pendingRem.value) confirmVisible.value = false
+  } finally {
+    submitting.value = false
+  }
+}
+
+function handleStatusChanged(d: SseStatusChanged) {
+  if (fault.value && fault.value.id === d.fault_event_id) {
+    fault.value.status = d.to as FaultStatus
+  }
+  entries.value.push({ seq: ++seq, kind: 'status', at: d.at, from: d.from, to: d.to, reason: d.reason })
+  if (d.to === 'awaiting_approval') {
+    // 弹窗已打开时不重复刷新（同轮只发一次；重诊断下一轮会再来）
+    if (!confirmVisible.value) {
+      refreshThenConfirm().catch(() => {})
+    }
+  }
+}
+
 function connectStream() {
   stream?.close()
   entries.value = []
@@ -167,12 +231,7 @@ function connectStream() {
       for (const s of d.recent_steps) applyStep(s)
     },
     onAgentStep: (d) => applyStep(d),
-    onStatusChanged: (d) => {
-      if (fault.value && fault.value.id === d.fault_event_id) {
-        fault.value.status = d.to as FaultStatus
-      }
-      entries.value.push({ seq: ++seq, kind: 'status', at: d.at, from: d.from, to: d.to, reason: d.reason })
-    },
+    onStatusChanged: (d) => handleStatusChanged(d),
     onVerificationProgress: (d) => {
       entries.value.push({
         seq: ++seq,
@@ -293,11 +352,15 @@ onBeforeUnmount(() => {
           </el-descriptions-item>
           <el-descriptions-item label="执行时间">{{ formatTime(r.executed_at) }}</el-descriptions-item>
         </el-descriptions>
+        <el-button v-if="pendingRem" type="warning" class="mb16" @click="refreshThenConfirm">
+          人工确认（approve / reject）—— 有待确认提案 #{{ pendingRem.id }}
+        </el-button>
         <el-alert
-          type="warning"
+          v-else
+          type="info"
           :closable="false"
           show-icon
-          title="人工确认弹窗（approve / reject 交互）在阶段四二轮接入"
+          title="当前没有待确认的修复提案"
         />
       </template>
     </el-card>
@@ -362,6 +425,32 @@ onBeforeUnmount(() => {
         </el-timeline>
       </div>
     </el-card>
+
+    <el-dialog v-model="confirmVisible" title="修复方案确认" width="560px">
+      <template v-if="confirmRem">
+        <el-descriptions :column="2" border size="small" class="mb16">
+          <el-descriptions-item label="动作">{{ ACTION_LABELS[confirmRem.action] ?? confirmRem.action }}</el-descriptions-item>
+          <el-descriptions-item label="目标">{{ confirmRem.namespace }}/{{ confirmRem.target }}</el-descriptions-item>
+          <el-descriptions-item label="风险等级">
+            <el-tag :type="riskTag(confirmRem.risk_level)" size="small">{{ confirmRem.risk_level }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="策略">{{ confirmRem.policy }}</el-descriptions-item>
+          <el-descriptions-item label="参数" :span="2">
+            <span class="mono">{{ paramBrief(confirmRem.params) }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+        <template v-if="fault?.diagnosis">
+          <div class="evidence-title">根因摘要（{{ fault.diagnosis.fault_type }}，置信度 {{ formatPercent(fault.diagnosis.confidence) }}）</div>
+          <p class="root-cause">{{ fault.diagnosis.root_cause }}</p>
+        </template>
+        <el-input v-model="comment" type="textarea" :rows="2" maxlength="200" placeholder="备注（可选，记录进审计）" />
+      </template>
+      <template #footer>
+        <el-button :disabled="submitting" @click="confirmVisible = false">取消</el-button>
+        <el-button type="danger" :disabled="submitting" @click="submitDecision('reject')">拒绝</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitDecision('approve')">批准</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
