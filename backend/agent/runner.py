@@ -2,8 +2,12 @@
 
 进程内 asyncio（MVP 原则，§5 引言）：webhook/diagnose 调 trigger() 抢 Redis 锁
 `event:{id}:running NX EX 1800` 后台起图；approve/reject 调 spawn_resume() 以
-Command(resume={"approved": bool}) 恢复挂起图。图节点不写业务表——RCA/提案
-落库、事件状态迁移、审计都在这里（§5.1：未捕获异常 → failed + audit）。
+Command(resume={"approved": bool}) 恢复挂起图。RCA/提案落库、终态状态迁移、
+审计在这里；中间态迁移（verifying/rolling_back/diagnosing）在图节点。
+
+线程轮次：thread_id = `fault-{id}-r{rediagnose_count}`——回滚重诊断由 runner
+重入新线程实现（evidence 是追加式 reducer，同线程重跑会污染上下文，
+落地决策 §一.9）。
 """
 import asyncio
 import logging
@@ -18,7 +22,7 @@ from agent.schemas import RemediationPlan, RCAReport
 from core.config import settings
 from core.db import SessionLocal
 from core.redis import r as redis
-from models import ACTIVE_STATUSES, FaultEvent, RemediationAction
+from models import ACTIVE_STATUSES, Diagnosis, FaultEvent, RemediationAction
 from risk_control.audit import write_audit
 
 logger = logging.getLogger(__name__)
@@ -66,23 +70,38 @@ async def trigger(fault_event_id: int) -> bool:
 async def run(fault_event_id: int) -> None:
     """运行诊断图并按终态落库（调用方已持锁）。未捕获异常 → failed + audit（§5.1）。"""
     try:
-        await _run_inner(fault_event_id)
-        await _clear_fail_streak()
+        outcome = await _run_inner(fault_event_id)
     except Exception as e:
         logger.exception("诊断失败 fault_event_id=%s", fault_event_id)
         await _mark_failed(fault_event_id, f"{type(e).__name__}: {e}"[:500])
         await _bump_fail_streak()
-    finally:
         await redis.delete(_lock_key(fault_event_id))
+        return
+    await _finish(fault_event_id, outcome)
 
 
-async def _run_inner(fault_event_id: int) -> None:
+async def _finish(fault_event_id: int, outcome: str | None) -> None:
+    """终态收尾：放锁 + 连续失败计数 + redo 重入新线程（落地决策 §一.9）。"""
+    await redis.delete(_lock_key(fault_event_id))
+    if outcome == "redo":
+        # 回滚节点已置 diagnosing 并递增 rediagnose_count
+        if not await trigger(fault_event_id):
+            logger.error("重诊断重入抢锁失败 fault_event_id=%s（不应发生）", fault_event_id)
+        return
+    if outcome == "resolved":
+        await _clear_fail_streak()
+    elif outcome in ("exec_failed", "failed"):
+        await _bump_fail_streak()
+
+
+async def _run_inner(fault_event_id: int) -> str | None:
     async with SessionLocal() as db:
         ev = await db.get(FaultEvent, fault_event_id)
         if ev is None:
             logger.warning("run：事件不存在 id=%s", fault_event_id)
-            return
-        await events.emit_status_changed(fault_event_id, ev.status, "diagnosing", "agent 开始诊断")
+            return None
+        if ev.status != "diagnosing":
+            await events.emit_status_changed(fault_event_id, ev.status, "diagnosing", "agent 开始诊断")
         ev.status = "diagnosing"
         ev.updated_at = datetime.now(timezone.utc)
         await db.commit()
@@ -105,12 +124,15 @@ async def _run_inner(fault_event_id: int) -> None:
         "risk_decision": None,
         "iteration": 0,
         "rediagnose_count": rediagnose_count,
+        "outcome": None,
     }
-    config = {"configurable": {"thread_id": thread_id_for(fault_event_id)}}
+    config = {"configurable": {"thread_id": thread_id_for(fault_event_id, rediagnose_count)}}
     result = await graph.ainvoke(init, config=config)
     interrupted = "__interrupt__" in result
     async with SessionLocal() as db:
-        await _finalize(db, fault_event_id, result, interrupted=interrupted, approved=None)
+        return await _finalize(
+            db, fault_event_id, result, interrupted=interrupted, approved=None
+        )
 
 
 async def _finalize(
@@ -120,14 +142,13 @@ async def _finalize(
     *,
     interrupted: bool,
     approved: bool | None,
-) -> None:
-    """按图终态落库：interrupt → RCA/提案入库 + awaiting_approval；
-    FORBIDDEN → failed；approved/auto → remediating（交接阶段三 executor）。"""
+) -> str | None:
+    """按图终态落库，返回 outcome 供 _finish 处理锁/计数/重入。"""
     state = {k: v for k, v in result.items() if k != "__interrupt__"}
     ev = await db.get(FaultEvent, fault_event_id)
     if ev is None:
         logger.warning("finalize：事件不存在 id=%s", fault_event_id)
-        return
+        return None
     now = datetime.now(timezone.utc)
     ev.updated_at = now
 
@@ -170,21 +191,40 @@ async def _finalize(
             )
             ev.status = "awaiting_approval"
             await db.commit()
-        return
+        return None
 
-    decision = state.get("risk_decision")
     if approved is False:
         # reject：approve/reject 接口已置 closed，这里仅一致性兜底
-        if ev.status not in ("closed",):
+        if ev.status != "closed":
             await events.emit_status_changed(fault_event_id, ev.status, "closed", "人工拒绝修复")
             ev.status = "closed"
             await db.commit()
-        return
+        return None
 
-    if decision is not None and decision.policy.value == "forbidden":
-        await events.emit_status_changed(
-            fault_event_id, ev.status, "failed", f"方案被拒绝：{decision.reason}"
-        )
+    outcome = state.get("outcome")
+    if outcome == "resolved":
+        if ev.status != "resolved":
+            await events.emit_status_changed(fault_event_id, ev.status, "resolved", "验证通过，故障恢复")
+            ev.status = "resolved"
+            ev.resolved_at = now
+            ev.mttr_seconds = max(0, int((now - ev.detected_at).total_seconds()))
+            await db.commit()
+        return "resolved"
+    if outcome in ("exec_failed", "failed"):
+        if ev.status in ACTIVE_STATUSES:
+            reason = "修复执行失败" if outcome == "exec_failed" else "回滚未完成或重诊断次数用尽"
+            await events.emit_status_changed(fault_event_id, ev.status, "failed", reason)
+            ev.status = "failed"
+            await db.commit()
+        return outcome
+    if outcome == "redo":
+        return "redo"  # 回滚节点已置 diagnosing + rediagnose_count
+
+    # 无 outcome：gate 分支拒绝（FORBIDDEN / 白名单不通过）→ failed 转人工
+    if ev.status in ACTIVE_STATUSES:
+        decision = state.get("risk_decision")
+        reason = decision.reason if decision is not None else "方案未通过风险门控"
+        await events.emit_status_changed(fault_event_id, ev.status, "failed", f"方案被拒绝：{reason}")
         ev.status = "failed"
         await db.commit()
         await write_audit(
@@ -193,30 +233,9 @@ async def _finalize(
             action="diagnose",
             resource=f"fault_event/{fault_event_id}",
             result="failure",
-            detail={"reason": decision.reason},
+            detail={"reason": reason},
         )
-        return
-
-    # approved（resume）或 AUTO 命中：交接 remediating；AUTO 场景补提案权益状态
-    if approved is None:  # AUTO：无人工批准，提案直接置 approved
-        rows = list(
-            (
-                await db.execute(
-                    select(RemediationAction).filter_by(fault_event_id=fault_event_id)
-                )
-            ).scalars().all()
-        )
-        pending = [r for r in rows if r.status == "pending"]
-        latest = max(pending, key=lambda r: r.created_at, default=None)
-        if latest is not None:
-            latest.status = "approved"
-            await db.commit()
-    if ev.status != "remediating":
-        await events.emit_status_changed(
-            fault_event_id, ev.status, "remediating", "方案放行，等待执行（阶段三 executor）"
-        )
-        ev.status = "remediating"
-        await db.commit()
+    return "failed"
 
 
 # ---------- 恢复（approve/reject） ----------
@@ -228,7 +247,10 @@ def spawn_resume(fault_event_id: int, approved: bool) -> None:
 
 
 async def resume(fault_event_id: int, approved: bool) -> None:
-    config = {"configurable": {"thread_id": thread_id_for(fault_event_id)}}
+    async with SessionLocal() as db:
+        ev = await db.get(FaultEvent, fault_event_id)
+        round_count = (ev.rediagnose_count or 0) if ev is not None else 0
+    config = {"configurable": {"thread_id": thread_id_for(fault_event_id, round_count)}}
     try:
         snap = graph.get_state(config)
     except Exception:
@@ -246,7 +268,10 @@ async def resume(fault_event_id: int, approved: bool) -> None:
         await _mark_failed(fault_event_id, f"resume: {type(e).__name__}: {e}"[:500])
         return
     async with SessionLocal() as db:
-        await _finalize(db, fault_event_id, result, interrupted=False, approved=approved)
+        outcome = await _finalize(
+            db, fault_event_id, result, interrupted=False, approved=approved
+        )
+    await _finish(fault_event_id, outcome)
 
 
 # ---------- 失败路径与计数 ----------

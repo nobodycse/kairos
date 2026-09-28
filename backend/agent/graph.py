@@ -1,25 +1,35 @@
-"""诊断图（architecture.md §7.1，阶段二子集：collect → analyze → propose → gate）。
+"""诊断图（architecture.md §7.1，阶段二+三：collect → analyze → propose → gate
+→ execute_fix → verify → rollback 循环）。
 
-阶段二不含 execute_fix/verify/rollback 节点（阶段三接在 gate 之后）：
 - gate_check：白名单（§11.1）+ decide()（§6.6），决策先落 state 再路由——
-  FORBIDDEN/拒绝 → END（runner 置 failed）；AUTO → END（runner 交接 executor）；
+  FORBIDDEN/拒绝 → END（runner 置 failed）；AUTO/approve → execute_fix；
   REQUIRE_APPROVAL → gate_wait。
 - gate_wait：interrupt() 挂起，approve/reject 以 Command(resume={"approved": bool})
-  恢复（design §5.2）；恢复后 gate_wait 重执行，interrupt 直接返回恢复值，
-  走 END 收尾（approved/rejected 的落库语义在 runner，接口已同步改库）。
+  恢复（design §5.2）；reject 的落库语义在 runner（接口已同步改库），图直接
+  goto END；approve 落到 execute_fix。
+- execute_fix：executor.execute（§6.5，快照先落库再 patch）→ 成功置 verifying
+  → verify；失败 outcome=exec_failed → END（runner 置 failed）。
+- verify：verification.run_window（§6.7，3 分钟窗口）→ 全过 outcome=resolved →
+  END（runner 置 resolved+mttr）；不过 → rollback 节点。
+- rollback：executor.rollback（按快照恢复）→ 成功且 rediagnose_count<2 →
+  count+1、置 diagnosing、outcome=redo → END（runner 放锁后重入新线程）；
+  否则 outcome=failed → END。图内不回边 collect——evidence 是追加式 reducer，
+  跨轮重跑会污染上下文，重诊断由 runner 起新线程等价实现（落地决策 §一.9）。
 
-图节点不写业务表（落库在 runner），可脱离 DB 测试；白名单需要 db session，
-在节点内开 SessionLocal。llm / call_tool / whitelist_validate 以模块级名字引用，
-便于冒烟脚本打桩（scripts/smoke_stage2.py）。
+图节点内需要 DB 的操作各自开 SessionLocal；llm / call_tool / whitelist_validate /
+executor / verification 以模块级名字引用，便于冒烟脚本打桩（scripts/smoke_stage*.py）。
 """
 import json
 import time
+from datetime import datetime, timezone
+from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent import events
 from agent.llm import llm
@@ -28,15 +38,19 @@ from agent.schemas import Evidence, RemediationPlan, RCAReport
 from agent.state import AgentState
 from agent.tools import REMEDIATION_PARAM_MODELS, ToolError, call_tool, to_openai_specs
 from core.db import SessionLocal
+from models import FaultEvent
 from risk_control import Decision, Policy, RiskLevel, decide
 from risk_control.whitelist import validate as whitelist_validate
+from remediation.executor import execute as executor_execute
+from remediation.executor import rollback as executor_rollback
+from verification import run_window
 
 MAX_ITERATIONS = 8  # §7.1：工具调用轮次上限
 
 
-def thread_id_for(fault_event_id: int) -> str:
-    """MemorySaver 的 checkpoint 线程标识（一事件一线程）。"""
-    return f"fault-{fault_event_id}"
+def thread_id_for(fault_event_id: int, round_count: int = 0) -> str:
+    """MemorySaver 的 checkpoint 线程标识（一事件一轮一线程，回滚重诊断进新线程）。"""
+    return f"fault-{fault_event_id}-r{round_count}"
 
 
 def _alert_brief(alert: dict) -> str:
@@ -250,18 +264,17 @@ async def gate_check(state: AgentState) -> Command:
         return Command(update={"risk_decision": decision}, goto=END)
     if decision.policy == Policy.REQUIRE_APPROVAL:
         return Command(update={"risk_decision": decision}, goto="gate_wait")
-    return Command(update={"risk_decision": decision}, goto=END)  # AUTO
+    return Command(update={"risk_decision": decision}, goto="execute_fix")  # AUTO
 
 
-async def gate_wait(state: AgentState) -> dict:
+async def gate_wait(state: AgentState) -> Command:
     """interrupt() 挂起点：恢复后本节点重执行，interrupt 直接返回恢复值。
 
-    恢复值 {"approved": bool} 的落库语义由 runner 处理（approve/reject 接口
-    已同步改库，图只负责走完到 END）。
+    reject（approved=False）→ END（closed 已由接口落库）；approve → execute_fix。
     """
     plan = state["plan"]
     decision = state["risk_decision"]
-    interrupt(
+    resume: Any = interrupt(
         {
             "action": plan.action,
             "target": plan.target,
@@ -270,7 +283,79 @@ async def gate_wait(state: AgentState) -> dict:
             "reason": plan.reason,
         }
     )
-    return {}
+    approved = bool(resume.get("approved")) if isinstance(resume, dict) else bool(resume)
+    if approved:
+        return Command(goto="execute_fix")
+    return Command(goto=END)
+
+
+# ---------- execute_fix / verify / rollback（阶段三） ----------
+
+
+async def _set_status(db: AsyncSession, fault_event_id: int, to: str, reason: str) -> None:
+    """节点内状态迁移 + status_changed 事件（迁移点在节点，终态收尾在 runner）。"""
+    ev = await db.get(FaultEvent, fault_event_id)
+    if ev is None or ev.status == to:
+        return
+    await events.emit_status_changed(fault_event_id, ev.status, to, reason)
+    ev.status = to
+    ev.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
+async def execute_fix(state: AgentState) -> Command | dict:
+    """执行修复（§6.5）：成功 → 置 verifying → verify；失败 → exec_failed → END。"""
+    fault_event_id = state["fault_event_id"]
+    plan, decision = state["plan"], state["risk_decision"]
+    async with SessionLocal() as db:
+        await _set_status(db, fault_event_id, "remediating", "开始执行修复")
+        result = await executor_execute(db, fault_event_id, plan, decision)
+    await events.emit_agent_step(
+        fault_event_id,
+        {
+            "iteration": state.get("iteration", 0),
+            "phase": "execute_fix",
+            "step": "executed" if result.success else "execute_failed",
+            "tool": plan.action,
+            "evidence_summary": result.message,
+        },
+    )
+    if not result.success:
+        return Command(update={"outcome": "exec_failed"}, goto=END)
+    async with SessionLocal() as db:
+        await _set_status(db, fault_event_id, "verifying", "修复执行成功，进入观察窗口")
+    return Command(goto="verify")
+
+
+async def verify(state: AgentState) -> Command:
+    """验证观察窗口（§6.7）：全过 → resolved；任一采样点不过 → 回滚。"""
+    plan = state["plan"]
+    passed = await run_window(state["fault_event_id"], plan.namespace, plan.target)
+    if passed:
+        return Command(update={"outcome": "resolved"}, goto=END)
+    return Command(goto="rollback_node")
+
+
+async def rollback_node(state: AgentState) -> Command:
+    """验证不过的自动回滚（§7.1 RB 分支）：成功且重诊断 <2 次 → redo 重入。"""
+    fault_event_id = state["fault_event_id"]
+    plan = state["plan"]
+    async with SessionLocal() as db:
+        await _set_status(db, fault_event_id, "rolling_back", "验证未通过，回滚变更")
+        result = await executor_rollback(db, fault_event_id, plan)
+        if not result.success:
+            return Command(update={"outcome": "failed"}, goto=END)
+        ev = await db.get(FaultEvent, fault_event_id)
+        if ev is None:
+            return Command(update={"outcome": "failed"}, goto=END)
+        if (ev.rediagnose_count or 0) < 2:
+            ev.rediagnose_count = (ev.rediagnose_count or 0) + 1
+            count = ev.rediagnose_count
+            await _set_status(
+                db, fault_event_id, "diagnosing", f"回滚完成，第 {count} 次重诊断"
+            )
+            return Command(update={"outcome": "redo"}, goto=END)
+    return Command(update={"outcome": "failed"}, goto=END)  # 重诊断次数用尽，转人工
 
 
 # ---------- 组图 ----------
@@ -295,12 +380,15 @@ def build_graph():
     g.add_node("propose_fix", propose_fix)
     g.add_node("gate_check", gate_check)
     g.add_node("gate_wait", gate_wait)
+    g.add_node("execute_fix", execute_fix)
+    g.add_node("verify", verify)
+    g.add_node("rollback_node", rollback_node)
     g.add_edge(START, "collect_evidence")
     g.add_edge("collect_evidence", "analyze")
     g.add_edge("analyze", "propose_fix")
     g.add_edge("propose_fix", "gate_check")
-    g.add_edge("gate_wait", END)
-    # gate_check 的分支用 Command(goto) 表达，不声明静态出边
+    # 可分支节点（gate_check/gate_wait/execute_fix/verify/rollback_node）一律
+    # Command(goto) 路由，不声明静态出边（langgraph 不允许两者混用）
     return g.compile(checkpointer=_build_checkpointer())
 
 

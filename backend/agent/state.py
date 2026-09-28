@@ -21,3 +21,4 @@ class AgentState(TypedDict):
     risk_decision: Decision | None
     iteration: int  # 工具调用轮次上限 8
     rediagnose_count: int  # 回滚后重诊断次数上限 2
+    outcome: str | None  # 阶段三内部通道：resolved/exec_failed/redo/failed（文档注记）

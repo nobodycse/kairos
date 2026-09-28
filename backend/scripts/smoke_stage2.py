@@ -10,17 +10,23 @@
 5. AUTO 分支（桩 decide）：不挂起直接结束
 """
 import asyncio
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+logging.disable(logging.CRITICAL)  # 冒烟静音：events 的 best-effort Redis 日志不关心
+
+from contextlib import asynccontextmanager
+
 import agent.graph as G  # noqa: E402
 from agent.llm import LLMResponse, ToolCall  # noqa: E402
 from agent.schemas import Evidence, RemediationPlan, RCAReport  # noqa: E402
 from agent.tools import ToolError  # noqa: E402
 from langgraph.types import Command  # noqa: E402
+from remediation.executor import ExecResult  # noqa: E402
 from risk_control import Decision, Policy, RiskLevel  # noqa: E402
 from risk_control.whitelist import WhitelistResult  # noqa: E402
 
@@ -88,6 +94,44 @@ async def whitelist_deny(db, plan):
     return WhitelistResult(allowed=False, violations=["模拟越界"])
 
 
+# ---------- 阶段三节点打桩（approve/AUTO 会走到 execute_fix/verify） ----------
+
+
+class _FakeEv:
+    def __init__(self):
+        self.status = "detected"
+        self.rediagnose_count = 0
+        self.updated_at = None
+
+
+_EV = _FakeEv()
+
+
+class _FakeDB:
+    async def get(self, model, key):
+        return _EV
+
+    async def commit(self):
+        return None
+
+
+@asynccontextmanager
+async def _fake_session():
+    yield _FakeDB()
+
+
+async def _fake_execute_ok(db, fault_event_id, plan, decision):
+    return ExecResult(success=True, message="stub 执行成功")
+
+
+async def _fake_rollback_ok(db, fault_event_id, plan):
+    return ExecResult(success=True, message="stub 回滚成功")
+
+
+async def _fake_window_pass(fault_event_id, namespace, target):
+    return True
+
+
 INIT = {
     "fault_event_id": 1,
     "alert": {
@@ -108,6 +152,11 @@ async def main() -> None:
     G.llm = fake
     G.call_tool = fake_call_tool
     G.whitelist_validate = whitelist_ok
+    # 阶段三节点打桩
+    G.SessionLocal = _fake_session
+    G.executor_execute = _fake_execute_ok
+    G.executor_rollback = _fake_rollback_ok
+    G.run_window = _fake_window_pass
 
     # 1) REQUIRE_APPROVAL：interrupt 挂起，risk_decision 已在状态里（gate_check 先行返回）
     r1 = await G.graph.ainvoke(dict(INIT), config=_cfg("smoke-approve"))
