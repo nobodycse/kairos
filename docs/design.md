@@ -676,9 +676,9 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 
 | 变量 | 示例 | 说明 |
 |---|---|---|
-| LLM_BASE_URL | `https://api.deepseek.com/v1` | OpenAI 兼容端点，切换供应商只改这里 |
-| LLM_API_KEY | `sk-xxx` | |
-| LLM_MODEL | `deepseek-chat` | |
+| LLM_BASE_URL | `https://api.deepseek.com/v1` | OpenAI 兼容端点；**Phase 2 增补：网页「系统设置」（DB）优先，.env 仅作未配置兜底** |
+| LLM_API_KEY | `sk-xxx` | 同上——推荐在网页「系统设置」配置（存 DB，API 只回掩码、修改入审计），避免 key 进 .env |
+| LLM_MODEL | `deepseek-chat` | 同上 |
 | LLM_TIMEOUT_SECONDS | `30` | §5.4 |
 | DATABASE_URL | `postgresql+asyncpg://kairos:xxx@postgres:5432/kairos` | |
 | REDIS_URL | `redis://redis:6379/0` | |

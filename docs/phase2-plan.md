@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一~四代码与文档全部完成；待服务器验收 + Demo 走通后收官）**
+> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一~四 + 增补轮 AI 配置管理代码完成；待 UI 配 key + 服务器验收 + Demo 走通后收官）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -156,6 +156,19 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 - [x] phase2-plan.md 全部勾选（仅剩 Demo 走通 / 录制演示两项，随服务器执行勾选）
 - [ ] （可选）录制演示
 
+## 6.5 增补轮：AI 配置管理（Phase 2.5，开源需求，用户驱动）
+
+**背景**：项目开源后 API key 不能放 `.env`（易误提交、换 key 要上服务器敲命令）。改为管理员在网页「系统设置」配置 AI 供应商（base_url / key / model），存 DB；`.env` 退役为未配置时的兜底。
+
+**设计决策**：系统级单配置；`system_settings(key, value JSONB)` 存 `{base_url, api_key, model}`；API 只回掩码（`sk-***后4`）、修改写审计（detail 不含明文）；**DB 配置优先 > .env 兜底**；`get_llm(db)` 动态获取（10s TTL 缓存 + 保存即失效，单 backend 进程）；`agent/llm.py` 模块级单例移除；runner 起图前 `llm_ready` 前置检查，未配置直接 failed 并提示去系统设置。
+
+### 任务与文件
+
+- [x] backend：SystemSetting 表 + alembic 0003 + `system_settings` 模块 + `/settings/llm` 路由（GET 掩码 / PUT api_key 留空=保持现有 / POST test 测连）+ graph 三节点、runner 前置检查、stage1_check、smoke 打桩改造（a890477，三套冒烟全绿）
+- [x] frontend：`SettingsView.vue` 系统设置页（表单 + 测试连接 + 保存）+ `/settings` 路由 + 菜单入口（099acc6）
+- [x] docs：design §7 LLM_* 三行注记（本次）
+- [ ] 服务器：部署后管理员在网页「系统设置」填真实 key → 测试连接 → 保存 → 继续验收（stage1 llm → stage2 → stage3 → 真实 OOM Demo）
+
 ## 7. 风险与预案（design.md §8.4）
 
 | 风险 | 等级 | 预案 |
@@ -193,4 +206,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 阶段三：SSE 订阅转发+验收脚本+文档 | 37e79d6 | 待服务器 stage3_check（happy path 自动；回滚路径手动指引） |
 | 2026-09-27 | 阶段四：诊断页时间线 + RCA 强化 | c5aa4bd | npm build 门禁通过；sse.ts 类型放宽 + onOpen |
 | 2026-09-27 | 阶段四：确认弹窗 + 实时流转 | a50287e | ElDialog 首例；pending 提案常驻入口兜底 |
-| 2026-09-27 | 阶段四：README 指引/勾选 + §8.1 注记 | 本次 | 待服务器走通 16 步 Demo 后勾最后两项，Phase 2 收官 |
+| 2026-09-27 | 阶段四：README 指引/勾选 + §8.1 注记 | 8a49187 | 待服务器走通 16 步 Demo 后勾最后两项，Phase 2 收官 |
+| 2026-09-27 | 服务器验收：stage1 tools/whitelist PASS | 8288412 / e2a1cf9 | 抓出并修复 RE2 转义、llm 单例调用、断言口径 3 个 bug |
+| 2026-09-27 | 增补轮：AI 配置管理后端 | a890477 | system_settings 表 + /settings/llm + get_llm 动态化 |
+| 2026-09-27 | 增补轮：前端系统设置页 | 099acc6 | 表单/测试连接/保存 + 菜单入口 |
+| 2026-09-27 | 增补轮：文档注记 | 本次 | design §7 + 本文件 §6.5；待 UI 配 key 后继续验收 |
