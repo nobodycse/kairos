@@ -225,6 +225,15 @@ class K8sClient:
             raise
         return self._to_deployment_info(dep)
 
+    async def patch_deployment(self, ns: str, name: str, body: dict) -> DeploymentInfo:
+        """patch Deployment（§6.5：所有动作经 patch 而非 replace）并返回最新状态。
+
+        404 向上抛（executor 侧在 patch 前已 get_deployment 确认存在）。
+        """
+        await self._apps.patch_namespaced_deployment(name=name, namespace=ns, body=body)
+        dep = await self._apps.read_namespaced_deployment(name, ns)
+        return self._to_deployment_info(dep)
+
     async def list_deployments(self, ns: str | None = None) -> list[DeploymentInfo]:
         if ns:
             resp = await self._apps.list_namespaced_deployment(ns)
