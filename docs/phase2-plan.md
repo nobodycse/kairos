@@ -1,6 +1,6 @@
 # Phase 2 实施计划：AI Agent 诊断闭环
 
-> 落盘日期：2026-09-26 ｜ 状态：**进行中（阶段一~四 + 增补轮 AI 配置管理代码完成；待 UI 配 key + 服务器验收 + Demo 走通后收官）**
+> 落盘日期：2026-09-26 ｜ 状态：**✅ 已完成（2026-09-29 收官：四阶段 + 增补轮全部服务器实测通过，真实 OOM 全链路 resolved）**
 > 里程碑：**走通 README 16 步 Demo**（注入 OOM → 自动诊断 → 人工确认 → 自动修复 → 验证 → 恢复）
 
 ---
@@ -45,11 +45,11 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 3. 阶段一：LLM 适配层 + 12 工具 + risk_control/audit 基础件（约 1-2 天）
 
-**阶段状态：进行中——代码全部完成（5d39fff / 5c2c08c / 9ec6c2e / 本提交），待服务器验收**
+**阶段状态：✅ 已完成（2026-09-29 服务器实测：tools 8/8 + whitelist 4 例拒绝+审计 + llm structured PASS）**
 
 ### 前置条件
 
-- [ ] **用户提供真实 `LLM_API_KEY`**（DeepSeek 或其他 OpenAI 兼容供应商），补进本地 `backend/.env` 与服务器 `.env`（凭据只进 .env，源码/示例/测试不写凭据字面量；config 变量已就绪，无需改代码）
+- [x] **用户提供真实 `LLM_API_KEY`**（DeepSeek 或其他 OpenAI 兼容供应商），补进本地 `backend/.env` 与服务器 `.env`（凭据只进 .env，源码/示例/测试不写凭据字面量；config 变量已就绪，无需改代码）——后改为增补轮 UI 配置（§6.5），key 已不入 .env
 
 ### 任务与文件
 
@@ -65,9 +65,9 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ### 验收标准
 
-- [ ] 脚本逐工具调用，8 个查询工具各产出一条 Evidence
-- [ ] `LLMClient.structured` 对样例告警产出合规 RCAReport JSON（schema 校验通过）
-- [ ] whitelist 对越界参数拒绝并写 audit
+- [x] 脚本逐工具调用，8 个查询工具各产出一条 Evidence
+- [x] `LLMClient.structured` 对样例告警产出合规 RCAReport JSON（schema 校验通过）
+- [x] whitelist 对越界参数拒绝并写 audit
 
 ### 风险
 
@@ -75,7 +75,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 4. 阶段二：LangGraph 诊断流 + agent_runner + 落库（约 2-3 天）
 
-**阶段状态：进行中——代码全部完成（0636524 / 7884fdf / 6ad99b3 / 本提交），待服务器验收**
+**阶段状态：✅ 已完成（2026-09-29 服务器实测：注入→4 轮 LLM 诊断→6 证据 4 源→挂起→409→approve→remediating）**
 
 ### 任务与文件
 
@@ -97,9 +97,9 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ### 验收标准
 
-- [ ] 服务器注入 OOM → 全自动诊断 → `diagnoses` 表出现 RCA（证据≥2 条跨 2 源）
-- [ ] `remediation_actions` 出现提案（如 restart_deployment），事件状态 detected→diagnosing→awaiting_approval
-- [ ] 连续两次 diagnose，第二次 409
+- [x] 服务器注入 OOM → 全自动诊断 → `diagnoses` 表出现 RCA（证据≥2 条跨 2 源）（实测：4 轮迭代，6 条证据 / 4 源，RCA 还识别出"事后稳态"与未设 CPU limit 隐患）
+- [x] `remediation_actions` 出现提案（如 restart_deployment），事件状态 detected→diagnosing→awaiting_approval（实测提案 update_resource_limit 512Mi→768Mi）
+- [x] 连续两次 diagnose，第二次 409
 
 ### 风险
 
@@ -108,7 +108,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 5. 阶段三：executor / verification / 回滚 + SSE 真实化（约 2-3 天）
 
-**阶段状态：进行中——代码全部完成（31b4bb5 / 68ac5a0 / 1d615eb / 本提交），待服务器验收**
+**阶段状态：✅ 已完成（2026-09-29 服务器实测：approve→执行→6/6 采样→resolved（MTTR 221s）；坏镜像场景自动回滚→rediagnose 递增）**
 
 ### 任务与文件
 
@@ -132,8 +132,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ### 验收标准
 
-- [ ] approve → 自动执行 restart → `verification_progress` 6 个采样点 → resolved（resolved_at 更新）
-- [ ] 验证不过场景（注入持续故障）→ 自动回滚 → rediagnose（rediagnose_count 递增）
+- [x] approve → 自动执行 restart → `verification_progress` 6 个采样点 → resolved（resolved_at 更新）（实测：update_resource_limit 768Mi→1Gi，6/6 采样全过，MTTR 221s，审计含 before/after diff）
+- [x] 验证不过场景（注入持续故障）→ 自动回滚 → rediagnose（rediagnose_count 递增）（实测：坏镜像 nginx:1.99 → 执行成功但 Pod 起不来 → 验证首轮不过 → 自动回滚恢复镜像 → rediagnose_count=1，36 秒完成）
 
 ### 风险
 
@@ -141,13 +141,13 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 
 ## 6. 阶段四：前端诊断详情页两轮 + Demo 16 步 + 收尾（约 2 天）
 
-**阶段状态：进行中——代码与文档全部完成（c5aa4bd / a50287e / 本提交），待服务器跑通 Demo 后收官**
+**阶段状态：✅ 已完成（2026-09-29 服务器实测：时间线/弹窗随真实事件联调通过；16 步 Demo 走通）**
 
 ### 任务与文件
 
 - [x] 一轮（只读）：`DiagnosisView.vue` 原始日志列表替换为 el-timeline（agent_step 按 iteration+phase 分组、tool_start/end 成对合并；analyze/propose/execute 的 note 型步骤并入 notes；status_changed 里程碑着色；verification_progress 五检查 tag 化；snapshot 重连重置回放 ≤20 条）；RCA 证据链按 source 着色条目化，修复动作区补状态/参数/快照/执行时间；`sse.ts` AgentStep 放宽为宽松字段（兼容阶段三 note 型）+ onOpen 回调；状态实时回写提前到一轮落地
 - [x] 二轮（交互）：`status_changed.to==awaiting_approval` → 重拉详情 → 确认弹窗（RCA 摘要 + 提案参数 + 风险等级 + comment 输入）→ `approveRemediation` / `rejectRemediation` → 状态实时流转；修复动作区 pending 提案常驻"人工确认"按钮兜底；409/竞态降级为刷新详情
-- [ ] 服务器跑通 **README 16 步 Demo** 全流程（注入 OOM → 自动诊断 → 确认 → 执行 → 验证 → 恢复）——操作指引已写入 README Demo 章节（真实 OOM 注入 + 人工确认 + 验证采样 + 回滚演示），push 部署后执行
+- [x] 服务器跑通 **README 16 步 Demo** 全流程（注入 OOM → 自动诊断 → 确认 → 执行 → 验证 → 恢复）——实测走的是**真实告警链路**：consume-memory 注入 → Prometheus 规则（修复后）触发 → Alertmanager → webhook → LLM 诊断 → awaiting_approval → approve → 执行 → 6 采样验证 → resolved（事件 8，MTTR 599s）
 
 ### 收尾清单
 
@@ -167,7 +167,7 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 - [x] backend：SystemSetting 表 + alembic 0003 + `system_settings` 模块 + `/settings/llm` 路由（GET 掩码 / PUT api_key 留空=保持现有 / POST test 测连）+ graph 三节点、runner 前置检查、stage1_check、smoke 打桩改造（a890477，三套冒烟全绿）
 - [x] frontend：`SettingsView.vue` 系统设置页（表单 + 测试连接 + 保存）+ `/settings` 路由 + 菜单入口（099acc6）
 - [x] docs：design §7 LLM_* 三行注记（本次）
-- [ ] 服务器：部署后管理员在网页「系统设置」填真实 key → 测试连接 → 保存 → 继续验收（stage1 llm → stage2 → stage3 → 真实 OOM Demo）
+- [x] 服务器：部署后管理员在网页「系统设置」填真实 key → 测试连接 → 保存 → 继续验收（stage1 llm → stage2 → stage3 → 真实 OOM Demo）（实测通过；服务器 .env 的占位 LLM_API_KEY 已移除，key 只存 DB）
 
 ## 7. 风险与预案（design.md §8.4）
 
@@ -211,3 +211,8 @@ Phase 1 已完成收尾（commit `c579152`）：K8s → Prometheus/Loki 观测�
 | 2026-09-27 | 增补轮：AI 配置管理后端 | a890477 | system_settings 表 + /settings/llm + get_llm 动态化 |
 | 2026-09-27 | 增补轮：前端系统设置页 | 099acc6 | 表单/测试连接/保存 + 菜单入口 |
 | 2026-09-27 | 增补轮：文档注记 | 本次 | design §7 + 本文件 §6.5；待 UI 配 key 后继续验收 |
+| 2026-09-29 | 服务器验收：stage1 tools/llm/whitelist PASS | 8288412 / e2a1cf9 | 抓出并修复 2 个 bug（RE2 转义 400、llm 单例误用）；截断断言口径修正 |
+| 2026-09-29 | 服务器验收：stage2 PASS（真实 LLM 诊断闭环） | edb292a | 抓出 graph.py 漏 import 的 NameError（本地打桩掩盖），补 AST 未定义名检查 |
+| 2026-09-29 | 服务器验收：stage3 PASS + 回滚场景 PASS | 4599933 / b596e53 | 抓出 executor limits 键名 422 与 PodOOMKilled 规则重复 OOM 盲区（changes()→重启增量 AND 终止原因） |
+| 2026-09-29 | 增补轮服务器实测：UI 配 key 生效 | 0f0be14 | /settings/llm 掩码视图 + DB 配置优先验证通过；服务器 .env 占位 key 移除 |
+| 2026-09-29 | **真实 OOM 全链路 Demo：事件 8 resolved（MTTR 599s）** | 本次 | Prometheus→Alertmanager→webhook→诊断→批准→执行→6 采样→resolved；**Phase 2 收官**（录制演示仍可选） |
