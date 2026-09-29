@@ -15,10 +15,12 @@ groups:
           summary: "{{ $labels.namespace }}/{{ $labels.pod }} 10 分钟内重启超过 3 次"
 
       # last_terminated_reason 是信息型 gauge：OOM 后恒 1 不回落（increase/max_over_time
-      # 都无法自动恢复）。changes() 统计窗口内的值跃变次数——跳变后 10 分钟窗口
+      # 都无法自动恢复）。changes() 只能捕捉"上次终止原因的跳变"——同一 Pod 连续两次
+      # OOM 时 reason 不变，第二次永远不告警（Phase 2 真实链路验收抓出）。改为
+      # "重启增量 >0 AND 上次终止原因=OOMKilled"：首次/重复 OOM 都触发，10 分钟窗口
       # 滑过自动归 0，告警随之 resolve
       - alert: PodOOMKilled
-        expr: changes(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[10m]) > 0
+        expr: increase(kube_pod_container_status_restarts_total[10m]) > 0 and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
         for: 0m
         labels:
           severity: critical
