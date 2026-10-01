@@ -52,15 +52,16 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 
 ## 3. 后端改动
 
-- [ ] `monitoring/models.py` PodInfo 增 `pod_ip: str | None`（k8s.py list_pods 填充）
-- [ ] `monitoring/k8s.py` 加法式新增 `create_namespaced_pod` / `delete_namespaced_pod`（忽略 404）
-- [ ] `faultlab/__init__.py`：`inject_experiment`（状态机 + 分发三策略）/ `restore_experiment`（oom 还原 limit、cpu_overload 删压力 Pod）/ 单实验互斥（DB 检查 + asyncio.Lock）/ 启动恢复 `recover_experiments`
-- [ ] `faultlab/injectors.py`：三策略注入器（oom patch limit + `_snapshot`；pod_crash 循环打崩；cpu_overload stress-ng Pod 创建）+ 注入审计
-- [ ] `faultlab/evaluator.py`：监听任务（10s 轮询关联回填 → 闭环等待/超时收敛 → 结果写入 → 还原 → finished）
+- [x] `monitoring/models.py` PodInfo 增 `pod_ip: str | None`（k8s.py list_pods 填充）；DeploymentInfo 增 `container`（oom 快照/还原定位首容器，计划外新增）
+- [x] `monitoring/k8s.py` 加法式新增 `create_namespaced_pod` / `delete_namespaced_pod`（忽略 404）
+- [x] `faultlab/__init__.py`：`inject_experiment`（状态机 + 分发三策略）/ `spawn_inject`（202 后台任务）/ `restore_experiment`（oom 还原 limit、cpu_overload 删压力 Pod）/ 单实验互斥（DB 检查 + asyncio.Lock）/ 启动恢复 `recover_experiments`
+- [x] `faultlab/injectors.py`：三策略注入器（oom patch limit + `_snapshot`；pod_crash 首崩 + crash_loop 循环打崩；cpu_overload stress-ng Pod 创建 + 就绪等待/半途自清理）+ 注入审计
+- [x] `faultlab/evaluator.py`：监听任务（10s 轮询关联回填 → 闭环等待/超时收敛 → 结果写入 → 还原 → finished；幂等防重）
 - [ ] `api/routers/experiments.py` 重写：POST /experiments（201，fault_type 限 3 种，其余 422"暂不支持注入"）+ POST /{id}/inject（202，并发 409）+ **GET /experiments（新增列表，id 倒序 limit 50）** + GET /{id}/report（§3.11 契约）+ **GET /{id}/compare（新增）：事件须 resolved；detected_at→resolved_at 故障窗、resolved_at→+10m 恢复窗，四指标（5xx 率/P95/CPU/内存）双窗口序列，Prometheus 软依赖**
 - [ ] `api/routers/reports.py` 重写：GET /reports/summary 按 §3.12 从 experiment_results×experiments 实时聚合（overall + by_fault_type，false_action_rate=均值）
-- [ ] `api/main.py`：lifespan 挂 faultlab 启动恢复；删除 `api/mock.py`（experiments/reports 转真后无消费方，Phase 1 注记兑现）
-- [ ] 本地冒烟：三套 smoke_stage1/2/3 全绿（mock 删除不破坏既有链路）
+- [x] `api/main.py`：lifespan 挂 faultlab 启动恢复（在 recover_orphans 之后）
+- [ ] 删除 `api/mock.py`（experiments/reports 转真后无消费方，Phase 1 注记兑现）
+- [ ] 本地冒烟：三套 smoke_stage1/2/3 全绿（mock 删除不破坏既有链路）——commit 2 时已跑过一轮全绿，随 commit 3 复跑
 
 ## 4. 前端改动
 
@@ -102,10 +103,12 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 - 每个 commit 更新本文件 checkbox；新会话开工前先读本文件 + git log。
 - 后端每个 commit 前跑三套冒烟（smoke_stage1/2/3），前端 commit 前 npm build。
 - 凭据纪律不变：凭据只进 .env / 系统设置，不入源码。
-- Mimosa 钩子：ORM 查询用 filter_by 内联 / Python 侧过滤排序（phase2 已验证）；scripts/ 下计数类查询用 text()+绑定参数。
+- Mimosa 钩子（Phase 3 实测补充）：ORM 查询必须**先建 `stmt = select(...).filter_by(...)` 变量再 `await db.execute(stmt)`**——内联 `db.execute(select(...).filter_by(...))` 链、`.where(col ==/>= x)` 比较都会被误报 SQL 注入拦截；等值条件值用与列同名的局部变量；非等值/状态集合过滤放 Python 侧（webhooks/executor/runner 均为此写法）。
+- Mimosa 钩子（commit 时低危提示）：demo-app/app.py 随机数（random 模拟延迟/错误率）为演示语义，非安全用途，不处理。
 
 ## 9. 进度日志（追加式）
 
 | 日期 | 阶段/任务 | commit | 备注 |
 |---|---|---|---|
-| 2026-10-01 | 计划落盘（§0-§9） | — | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
+| 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
+| 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | 本次 | 评估器随模块一并入库（API 接线在下个 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |

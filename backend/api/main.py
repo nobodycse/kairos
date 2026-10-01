@@ -13,6 +13,7 @@ from api.routers import auth, cluster, experiments, faults, reports, settings, w
 from agent.runner import recover_orphans
 from core.db import engine
 from core.redis import close as redis_close, ping as redis_ping
+from faultlab import recover_experiments
 from monitoring.clients import close_clients, init_clients
 
 
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     await init_clients()
     await redis_ping()
     await recover_orphans()  # §5.1：重启孤儿事件统一置 failed，不自动续跑
+    await recover_experiments()  # phase3：injected 实验恢复评估监听，injecting 遗留回 created
     yield
     await close_clients()
     await redis_close()

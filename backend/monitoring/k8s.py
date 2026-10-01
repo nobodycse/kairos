@@ -153,6 +153,7 @@ class K8sClient:
                     restarts=restarts,
                     age_seconds=age,
                     memory_limit_bytes=limits or None,
+                    pod_ip=st.pod_ip or None,
                 )
             )
         return out
@@ -165,6 +166,21 @@ class K8sClient:
                 return None
             raise
         return (await self.list_pods(ns, field_selector=f"metadata.name={name}"))[0] if pod else None
+
+    # ---------- Pod 写操作（Phase 3 fault-lab 专用，architecture.md §10） ----------
+
+    async def create_namespaced_pod(self, ns: str, body: dict) -> str:
+        """创建 Pod（fault-lab stress-ng 压力 Pod），返回 Pod 名。"""
+        resp = await self._core.create_namespaced_pod(namespace=ns, body=body)
+        return resp.metadata.name
+
+    async def delete_namespaced_pod(self, ns: str, name: str) -> None:
+        """删除 Pod（实验收尾清理）；不存在视为已删除。"""
+        try:
+            await self._core.delete_namespaced_pod(name=name, namespace=ns)
+        except k8s.ApiException as e:
+            if e.status != 404:
+                raise
 
     async def describe_pod(self, ns: str, name: str) -> dict | None:
         """status + conditions + 容器状态聚合（Phase 2 Agent 工具 get_pod 的底层）。"""
@@ -214,6 +230,7 @@ class K8sClient:
             cpu_limit=(limits or {}).get("cpu"),
             memory_limit=(limits or {}).get("memory"),
             labels=dict(dep.metadata.labels or {}),
+            container=containers[0].name if containers else None,
         )
 
     async def get_deployment(self, ns: str, name: str) -> DeploymentInfo | None:
