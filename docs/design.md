@@ -470,6 +470,38 @@ reject 200：
 
 `diagnosed_correctly` 的判定口径：diagnoses.fault_type 与实验注入的 fault_type 同类（OOM / CrashLoop 等映射表由后端维护）。
 
+### 3.11.1 GET /api/v1/experiments（Phase 3 新增）
+
+实验室页列表数据源。id 倒序最多 50 条，条目结构同 §3.11（含 `fault_event_id` / `result`，未闭环为 `null`）：
+
+```json
+{"items": [{"id": 8, "fault_type": "oom", "target_ns": "demo", "target_workload": "payment-service", "params": {"memory_limit": "128Mi"}, "status": "finished", "injected_at": "...", "created_at": "...", "fault_event_id": 45, "result": {…§3.11 result…}}], "total": 8}
+```
+
+`total` 为全部实验数（含进行中）；`params` 剥离下划线前缀的内部键（`_snapshot` 等不入契约）；`last_error` 为最近一次注入失败原因（成功注入后清除语义：仅 created 状态且有失败记录时非 null）。
+
+### 3.11.2 GET /api/v1/experiments/{id}/compare（Phase 3 新增）
+
+修复前后指标对比（前端双窗口曲线）。要求实验已关联事件且事件 `resolved`，否则 409。故障窗 = detected_at→resolved_at，恢复窗 = resolved_at→+10m；采样步长自适应（下限 30s）；Prometheus 不可达时 `points` 为空数组（软依赖，§3.2.1 同语义）：
+
+```json
+{
+  "experiment_id": 8,
+  "fault_event_id": 45,
+  "fault_window": {"start": "2026-09-04T11:52:10+00:00", "end": "2026-09-04T11:56:10+00:00"},
+  "recovery_window": {"start": "2026-09-04T11:56:10+00:00", "end": "2026-09-04T12:06:10+00:00"},
+  "metrics": [
+    {
+      "key": "error_rate", "name": "5xx 错误率", "unit": "ratio",
+      "fault": {"points": [{"ts": "2026-09-04T11:52:30+00:00", "value": 0.4}]},
+      "recovery": {"points": [{"ts": "2026-09-04T11:56:30+00:00", "value": 0.0}]}
+    }
+  ]
+}
+```
+
+`metrics` 固定四条：`error_rate`（5xx 率）、`p95_latency`（秒）、`cpu_usage`（核）、`memory_usage`（字节）；后两条按事件 `labels.pod`（缺省退回 target_workload）前缀匹配 namespace 内 Pod。前两条 PromQL 与告警规则同源。
+
 ### 3.12 GET /api/v1/reports/summary
 
 ```json

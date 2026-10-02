@@ -57,11 +57,11 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 - [x] `faultlab/__init__.py`：`inject_experiment`（状态机 + 分发三策略）/ `spawn_inject`（202 后台任务）/ `restore_experiment`（oom 还原 limit、cpu_overload 删压力 Pod）/ 单实验互斥（DB 检查 + asyncio.Lock）/ 启动恢复 `recover_experiments`
 - [x] `faultlab/injectors.py`：三策略注入器（oom patch limit + `_snapshot`；pod_crash 首崩 + crash_loop 循环打崩；cpu_overload stress-ng Pod 创建 + 就绪等待/半途自清理）+ 注入审计
 - [x] `faultlab/evaluator.py`：监听任务（10s 轮询关联回填 → 闭环等待/超时收敛 → 结果写入 → 还原 → finished；幂等防重）
-- [ ] `api/routers/experiments.py` 重写：POST /experiments（201，fault_type 限 3 种，其余 422"暂不支持注入"）+ POST /{id}/inject（202，并发 409）+ **GET /experiments（新增列表，id 倒序 limit 50）** + GET /{id}/report（§3.11 契约）+ **GET /{id}/compare（新增）：事件须 resolved；detected_at→resolved_at 故障窗、resolved_at→+10m 恢复窗，四指标（5xx 率/P95/CPU/内存）双窗口序列，Prometheus 软依赖**
-- [ ] `api/routers/reports.py` 重写：GET /reports/summary 按 §3.12 从 experiment_results×experiments 实时聚合（overall + by_fault_type，false_action_rate=均值）
+- [x] `api/routers/experiments.py` 重写：POST /experiments（201，fault_type 限 3 种，其余 422"暂不支持注入"）+ POST /{id}/inject（202，并发 409）+ **GET /experiments（新增列表，id 倒序 limit 50）** + GET /{id}/report（§3.11 契约，含 last_error）+ **GET /{id}/compare（新增）：事件须 resolved；detected_at→resolved_at 故障窗、resolved_at→+10m 恢复窗，四指标（5xx 率/P95/CPU/内存）双窗口序列，Prometheus 软依赖**
+- [x] `api/routers/reports.py` 重写：GET /reports/summary 按 §3.12 从 experiment_results×experiments 实时聚合（overall + by_fault_type，false_action_rate=均值）
 - [x] `api/main.py`：lifespan 挂 faultlab 启动恢复（在 recover_orphans 之后）
-- [ ] 删除 `api/mock.py`（experiments/reports 转真后无消费方，Phase 1 注记兑现）
-- [ ] 本地冒烟：三套 smoke_stage1/2/3 全绿（mock 删除不破坏既有链路）——commit 2 时已跑过一轮全绿，随 commit 3 复跑
+- [x] 删除 `api/mock.py`（experiments/reports 转真后无消费方，Phase 1 注记兑现）；design.md 增 §3.11.1/§3.11.2 契约 + architecture §12 表补两行（先契约后实现的协作规则）
+- [x] 本地冒烟：三套 smoke_stage1/2/3 全绿（mock 删除不破坏既有链路）
 
 ## 4. 前端改动
 
@@ -111,4 +111,5 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 | 日期 | 阶段/任务 | commit | 备注 |
 |---|---|---|---|
 | 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
-| 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | 本次 | 评估器随模块一并入库（API 接线在下个 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |
+| 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | fd9b34f | 评估器随模块一并入库（API 接线在下一 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |
+| 2026-10-01 | experiments/reports 接真 DB + compare + 删 mock.py + 契约文档 | 本次 | design §3.11.1/§3.11.2 + architecture §12 补两行 |

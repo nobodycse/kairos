@@ -584,8 +584,10 @@ LLM 提议 → 参数白名单校验 → risk_control.decide() → (人工确认
 | GET | /api/v1/faults/{id}/stream | **SSE**：状态变更 + Agent 步骤流 |
 | POST | /api/v1/remediations/{id}/approve / reject | 人工确认 |
 | POST | /api/v1/experiments | 创建实验 |
+| GET | /api/v1/experiments | 实验列表（Phase 3 新增，design §3.11.1） |
 | POST | /api/v1/experiments/{id}/inject | 执行注入 |
 | GET | /api/v1/experiments/{id}/report | 单次实验报告 |
+| GET | /api/v1/experiments/{id}/compare | 修复前后指标对比（Phase 3 新增，design §3.11.2） |
 | GET | /api/v1/reports/summary | 汇总评估指标 |
 | POST | /api/v1/webhooks/alerts | Alertmanager 接收（内网） |
 | GET | /health | 存活探针（CI/CD 健康检查用） |
