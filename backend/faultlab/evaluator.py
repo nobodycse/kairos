@@ -45,12 +45,13 @@ POLL_INTERVAL_S = 10
 _ASSOC_SKEW_S = 30  # 注入时刻与告警时刻的时钟/顺序容差
 TERMINAL_STATUSES = ("resolved", "failed", "closed")
 
-# diagnosed_correctly 前缀映射（大小写不敏感，phase3-plan §2.4）：
-# RCAReport.fault_type 取值如 OOM / CrashLoop / CPUThrottling
+# diagnosed_correctly 前缀映射（大小写不敏感，phase3-plan §2.4）。覆盖两类命名：
+# RCA 自拟类型（OOM / CrashLoop / CPUThrottling…）与告警同名类型
+# （PodOOMKilled / PodCrashLooping / ContainerCPUHigh…，六轮实测 Agent 实际输出）
 DIAGNOSIS_PREFIXES = {
-    "oom": ("oom",),
-    "pod_crash": ("crash",),
-    "cpu_overload": ("cpu",),
+    "oom": ("oom", "containeroomkilled", "containermemory"),
+    "pod_crash": ("crash", "podcrash", "backoff"),
+    "cpu_overload": ("cpu", "containercpu"),
 }
 
 
