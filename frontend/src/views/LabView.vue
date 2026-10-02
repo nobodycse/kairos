@@ -93,6 +93,23 @@ function selectRow(row: Experiment) {
   selectedId.value = row.id
 }
 
+// 已创建但未注入的实验可单独补注入（创建时被互斥 409 拒绝等场景）
+const injectingSelected = ref(false)
+
+async function handleInjectSelected() {
+  if (!selected.value) return
+  injectingSelected.value = true
+  try {
+    await injectExperiment(selected.value.id)
+    ElMessage.success(`实验 #${selected.value.id} 已开始注入`)
+    await refresh()
+  } catch {
+    /* 409/422 细节由拦截器统一提示 */
+  } finally {
+    injectingSelected.value = false
+  }
+}
+
 function openDiagnosis(faultEventId: number | null) {
   if (faultEventId) router.push({ name: 'diagnosis', params: { faultId: faultEventId } })
 }
@@ -319,15 +336,26 @@ function compareOption(metric: CompareMetric): EChartsOption {
       <template #header>
         <div class="card-header">
           <span>实验 #{{ selected.id }} 报告</span>
-          <el-button
-            v-if="selected.fault_event_id"
-            size="small"
-            type="primary"
-            plain
-            @click="openDiagnosis(selected.fault_event_id)"
-          >
-            查看关联事件 #{{ selected.fault_event_id }}
-          </el-button>
+          <div>
+            <el-button
+              v-if="selected.status === 'created'"
+              size="small"
+              type="warning"
+              :loading="injectingSelected"
+              @click="handleInjectSelected"
+            >
+              注入故障
+            </el-button>
+            <el-button
+              v-if="selected.fault_event_id"
+              size="small"
+              type="primary"
+              plain
+              @click="openDiagnosis(selected.fault_event_id)"
+            >
+              查看关联事件 #{{ selected.fault_event_id }}
+            </el-button>
+          </div>
         </div>
       </template>
 
