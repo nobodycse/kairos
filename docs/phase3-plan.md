@@ -65,10 +65,10 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 
 ## 4. 前端改动
 
-- [ ] `services/experiments.ts`：加 `listExperiments()`、`getExperimentCompare(id)` 类型与封装
-- [ ] `LabView.vue` 重做：创建→自动 inject 真实流程 + 类型限 3 种（oom 带 memory_limit 输入）+ **实验列表表（20s 轮询，FaultListView 先例）** + 报告块（关联事件 #id 可跳诊断页）+ **compare 双窗口 EChart 曲线**；删"Phase 0 仅演示"告警
-- [ ] `HistoryView.vue`：summary 四卡（真数据）+ by_fault_type 表 + **按类型 EChart 柱状图（诊断准确率/修复成功率/MTTR）**；删"Phase 3 补充"占位
-- [ ] npm build 门禁通过
+- [x] `services/experiments.ts`：加 `listExperiments()`、`getExperimentCompare(id)` 类型与封装（Experiment 增 last_error）
+- [x] `LabView.vue` 重做：创建→自动 inject 真实流程 + 类型限 3 种（oom 带 memory_limit 输入）+ **实验列表表（20s 轮询，FaultListView 先例）** + 报告块（关联事件 #id 可跳诊断页）+ **compare 双窗口 EChart 曲线（仅在 result.auto_recovered=true 时拉取，规避 409 弹窗）**；删"Phase 0 仅演示"告警
+- [x] `HistoryView.vue`：summary 四卡（真数据，60s 轮询）+ by_fault_type 表 + **双轴 EChart 柱状图（诊断准确率/自动恢复率 %，MTTR 秒）**；删"Phase 3 补充"占位
+- [x] npm build 门禁通过（vue-tsc + vite build）
 
 ## 5. 提交拆分（后端 commit 前跑三套冒烟，前端 commit 前 npm build）
 
@@ -112,4 +112,5 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 |---|---|---|---|
 | 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
 | 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | fd9b34f | 评估器随模块一并入库（API 接线在下一 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |
-| 2026-10-01 | experiments/reports 接真 DB + compare + 删 mock.py + 契约文档 | 本次 | design §3.11.1/§3.11.2 + architecture §12 补两行 |
+| 2026-10-01 | experiments/reports 接真 DB + compare + 删 mock.py + 契约文档 | c6a785a | design §3.11.1/§3.11.2 + architecture §12 补两行；phase3_check.py 入库 |
+| 2026-10-01 | 前端：LabView 重做 + HistoryView 图表 + services 封装 | 本次 | npm build（vue-tsc+vite）通过；compare 仅 auto_recovered 后拉取 |

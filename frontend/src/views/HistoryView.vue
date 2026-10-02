@@ -1,18 +1,32 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { getReportSummary, type ReportSummary } from '@/services/reports'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import type { EChartsOption } from 'echarts'
+import { getReportSummary, type FaultTypeStat, type ReportSummary } from '@/services/reports'
 import { FAULT_TYPE_LABELS, formatDuration, formatPercent } from '@/utils/format'
+import EChart from '@/components/EChart.vue'
 
+// Phase 3：summary 接真数据（experiment_results 实时聚合）；比率为 null（无数据）显示 '-'
 const loading = ref(true)
 const summary = ref<ReportSummary | null>(null)
 
-onMounted(async () => {
+let timer: number | undefined
+
+async function refresh() {
   try {
     summary.value = await getReportSummary()
+  } catch {
+    /* 轮询失败静默，下一轮重试 */
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  refresh()
+  timer = window.setInterval(refresh, 60000)
 })
+
+onBeforeUnmount(() => window.clearInterval(timer))
 
 const overallCards = [
   { key: 'diagnosis_accuracy', label: '诊断准确率', format: (v: number) => formatPercent(v) },
@@ -20,6 +34,47 @@ const overallCards = [
   { key: 'avg_mttr_s', label: '平均 MTTR', format: (v: number) => formatDuration(v) },
   { key: 'false_action_rate', label: '误操作率', format: (v: number) => formatPercent(v) },
 ] as const
+
+// 双轴柱状图：诊断准确率/自动恢复率（%，左轴）+ MTTR（秒，右轴）
+const chartOption = computed<EChartsOption>(() => {
+  const stats: FaultTypeStat[] = summary.value?.by_fault_type ?? []
+  const types = stats.map((s) => FAULT_TYPE_LABELS[s.fault_type] ?? s.fault_type)
+  const pct = (v: number | null) => (v === null ? 0 : Number((v * 100).toFixed(1)))
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { top: 0 },
+    grid: { left: 8, right: 8, top: 36, bottom: 8, containLabel: true },
+    xAxis: { type: 'category', data: types },
+    yAxis: [
+      { type: 'value', name: '%', max: 100, axisLabel: { formatter: '{value}%' } },
+      { type: 'value', name: '秒', axisLabel: { formatter: '{value}s' } },
+    ],
+    series: [
+      {
+        name: '诊断准确率',
+        type: 'bar',
+        barMaxWidth: 36,
+        itemStyle: { color: '#409eff' },
+        data: stats.map((s) => pct(s.diagnosis_accuracy)),
+      },
+      {
+        name: '自动恢复率',
+        type: 'bar',
+        barMaxWidth: 36,
+        itemStyle: { color: '#67c23a' },
+        data: stats.map((s) => pct(s.recovery_rate)),
+      },
+      {
+        name: '平均 MTTR',
+        type: 'bar',
+        yAxisIndex: 1,
+        barMaxWidth: 36,
+        itemStyle: { color: '#e6a23c' },
+        data: stats.map((s) => s.avg_mttr_s ?? 0),
+      },
+    ],
+  }
+})
 </script>
 
 <template>
@@ -61,13 +116,17 @@ const overallCards = [
           <template #default="{ row }">{{ formatPercent(row.false_action_rate) }}</template>
         </el-table-column>
       </el-table>
-      <el-alert
-        class="mt16"
-        type="info"
-        :closable="false"
-        show-icon
-        title="修复前后指标对比图表在 Phase 3 补充"
+      <el-empty
+        v-if="summary && !summary.by_fault_type.length"
+        description="暂无实验数据：到「故障实验室」创建并注入第一个实验"
+        :image-size="80"
       />
+    </el-card>
+
+    <el-card shadow="never" class="mt16">
+      <template #header>分类指标对比（诊断准确率 / 自动恢复率 / 平均 MTTR）</template>
+      <EChart v-if="summary?.by_fault_type?.length" :option="chartOption" height="320px" />
+      <el-empty v-else description="实验闭环后此处展示分类柱状图" :image-size="80" />
     </el-card>
   </div>
 </template>
