@@ -37,7 +37,7 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
    - **oom**：patch payment-service `memory_limit`→`params.memory_limit`（默认 128Mi）；原值快照存 `experiment.params._snapshot`（含 container 名），实验结束自动还原。Agent 若提案 update_resource_limit 调回，128Mi→512Mi=4x 恰好在白名单内（§11.1 0.5x–4x）✓
    - **pod_crash**：取目标 workload 的 Pod IP → `POST http://<pod_ip>:8000/internal/crash`，注入器**循环打崩**（等 Pod 重启 ready 后再崩，重启增量≥4 次满足 PodCrashLooping 规则 `increase(restarts[10m])>3`，整体上限 8 分钟）；事件被关联后停止打崩（避免干扰修复验证），Pod 消失（被替换）自然终止
    - **cpu_overload**：demo ns 创建压力 Pod（`stress-cpu-<expid>`，bare pod 无 owner → 事件 workload=None，靠决策 3 的兜底关联；busybox 双 busy loop 占满 CPU、limits cpu=200m，900s 后自止）→ ContainerCPUHigh（rate/limit>0.9 for 5m）触发；实验结束删除该 Pod。（注记：原方案 stress-ng 镜像被 DaoCloud 镜像加速白名单 403 拒绝，服务器实测后改预热 busybox，故障语义等价）
-3. **关联回填**（architecture §8）：注入后启动监听任务（10 分钟窗口，10s 轮询）——回填 demo ns 内 `detected_at >= injected_at-30s` 且（workload==target **或 workload 为空**）且 experiment_id 为空的活跃新事件，写入 `fault_events.experiment_id`；workload 为空的聚合告警事件靠"**同一时刻只允许一个进行中实验**"兜底归属（inject 时 409 拒绝并发）。
+3. **关联回填**（architecture §8）：注入后启动监听任务（10s 轮询）——回填 demo ns 内 `detected_at >= injected_at-30s` 且（workload==target **或 workload 为空**）且 experiment_id 为空的活跃新事件，写入 `fault_events.experiment_id`；workload 为空的聚合告警事件靠"**同一时刻只允许一个进行中实验**"兜底归属（inject 时 409 拒绝并发）。（注记：关联窗口由 §8 原文的 10 分钟放宽到 20 分钟——服务器实测 ContainerCPUHigh 因 rate[5m] 窗口填充 + for 5m，结构性最早 T+10min 才 firing，10 分钟窗口两轮都差秒级错过）
 4. **评估口径**（结果写 `experiment_results`，实验置 finished）：
    - `detected` = 10 分钟内关联到事件；`detection_latency_s` = event.detected_at − injected_at
    - `diagnosed_correctly` = 最新 Diagnosis.fault_type 与实验类型的**前缀映射表**（大小写不敏感）：oom→`OOM*`、pod_crash→`CRASH*`（含 CrashLoop*）、cpu_overload→`CPU*`，后端维护

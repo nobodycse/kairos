@@ -37,7 +37,9 @@ from risk_control.audit import resource_for
 
 logger = logging.getLogger(__name__)
 
-ASSOC_WINDOW_S = 600  # 注入后关联窗口（architecture.md §8）
+ASSOC_WINDOW_S = 1200  # 注入后关联窗口：architecture.md §8 原文 10 分钟，但
+# ContainerCPUHigh（for 5m + rate[5m] 窗口填充）结构性最早 T+10min 才 firing
+# （服务器实测 06:41 注入 06:51:30 firing，差 15s 未关联），放宽到 20 分钟（§2.3 注记）
 TOTAL_CAP_S = 2400  # 自注入起的收敛总上限（phase3-plan §2.4）
 POLL_INTERVAL_S = 10
 _ASSOC_SKEW_S = 30  # 注入时刻与告警时刻的时钟/顺序容差
