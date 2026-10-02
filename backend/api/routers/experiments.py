@@ -6,7 +6,6 @@
 """
 import asyncio
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -192,12 +191,27 @@ async def report(experiment_id: int, db=Depends(get_db), _: str = Depends(requir
 # ---------- compare（§3.11.2，Phase 3 新增） ----------
 
 _COMPARE_METRICS = (
-    ("error_rate", "5xx 错误率", "ratio", _GLOBAL_EXPRS["error_rate"]),
+    # error_rate：无 5xx 序列时 sum() 返回空向量，or vector(0) 兜底为 0（真实状态）
+    (
+        "error_rate",
+        "5xx 错误率",
+        "ratio",
+        '(sum(rate(demo_http_requests_total{status=~"5.."}[5m])) or vector(0)) / sum(rate(demo_http_requests_total[5m]))',
+    ),
     ("p95_latency", "P95 延迟", "seconds", _GLOBAL_EXPRS["p95_latency"]),
     # CPU/内存按事件 Pod 前缀匹配（labels.pod 优先，缺省退回 target_workload）
     ("cpu_usage", "CPU 使用", "cores", None),
     ("memory_usage", "内存使用", "bytes", None),
 )
+
+_POD_PREFIX_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _pod_prefix(prefix: str) -> str:
+    """PromQL regex 前缀只保留安全字面量字符。RE2 不接受 re.escape 输出的
+    反斜杠转义减号（Phase 2 get_metrics 同款坑），Pod 名字符集有限，直接过滤。"""
+    cleaned = "".join(c for c in prefix if c in _POD_PREFIX_SAFE)
+    return cleaned or prefix
 
 
 def _expr_for(key: str, selector: str) -> str:
@@ -247,8 +261,8 @@ async def compare(experiment_id: int, db=Depends(get_db), _: str = Depends(requi
     fault_start, fault_end = ev.detected_at, ev.resolved_at
     recov_start = ev.resolved_at
     recov_end = ev.resolved_at + timedelta(seconds=_RECOVERY_WINDOW_S)
-    prefix = (ev.labels or {}).get("pod") or exp.target_workload
-    selector = f'namespace="{exp.target_ns}", pod=~"{re.escape(prefix)}.*"'
+    prefix = _pod_prefix((ev.labels or {}).get("pod") or exp.target_workload)
+    selector = f'namespace="{exp.target_ns}", pod=~"{prefix}.*"'
 
     async def both_windows(key: str, expr: str) -> dict:
         fault_pts, recov_pts = await asyncio.gather(

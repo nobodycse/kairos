@@ -166,9 +166,15 @@ def run_experiment(c: httpx.Client, fault_type: str) -> dict:
         _log(f"oom 还原检查 OK（memory_limit={limit_after}）")
     if fault_type == "cpu_overload":
         pod_name = f"stress-cpu-{exp_id}"
-        if stress_pod_exists(c, pod_name):
-            raise AssertionError(f"cpu_overload 收尾失败：压力 Pod {pod_name} 仍存在")
-        _log("cpu_overload 收尾检查 OK（压力 Pod 已删除）")
+        # 删除是异步的：Pod 可能短暂处于 Terminating，轮询等待真正消失
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if not stress_pod_exists(c, pod_name):
+                _log("cpu_overload 收尾检查 OK（压力 Pod 已删除）")
+                break
+            time.sleep(5)
+        else:
+            raise AssertionError(f"cpu_overload 收尾失败：压力 Pod {pod_name} 60s 内仍存在")
 
     _print_faultlab_audits(exp_id)
     return {"exp_id": exp_id, "fault_event_id": fault_event_id, "result": result}

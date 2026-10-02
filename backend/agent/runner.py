@@ -240,6 +240,23 @@ async def _finalize(
     if ev.status in ACTIVE_STATUSES:
         decision = state.get("risk_decision")
         reason = decision.reason if decision is not None else "方案未通过风险门控"
+        # RCA 已产出，落库（评估口径 diagnosed_correctly 需要；Phase 3 服务器
+        # 实测抓出：cpu_overload 事件因提案被白名单拒绝，诊断此前无处可见）
+        rca: RCAReport | None = state.get("rca")
+        if rca is not None:
+            db.add(
+                Diagnosis(
+                    fault_event_id=fault_event_id,
+                    fault_type=rca.fault_type,
+                    root_cause=rca.root_cause,
+                    evidence=[e.model_dump() for e in rca.evidence],
+                    confidence=rca.confidence,
+                    blast_radius=rca.blast_radius,
+                    suggestion=rca.suggestion,
+                    llm_model=settings.llm_model,
+                    iterations=state.get("iteration") or 0,
+                )
+            )
         await events.emit_status_changed(fault_event_id, ev.status, "failed", f"方案被拒绝：{reason}")
         ev.status = "failed"
         await db.commit()
