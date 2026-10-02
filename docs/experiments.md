@@ -23,9 +23,11 @@
 | pod_crash | 1 | 1/1 | 148s | 1/1（根因判定 CrashLoop） | 1/1 | 540s | 0 |
 | cpu_overload | 1 | 1/1 | ~600s | 1/1（根因判定 ContainerCPUHigh） | 0/1 | - | 0 |
 
-上表取每类故障的收官实验（里程碑口径）。`GET /reports/summary` 实时聚合**全部**
-实验（含调参校准轮），收官时快照：total_experiments=13，overall
-diagnosis_accuracy=0.8 / recovery_rate=0.2857 / avg_mttr_s=1260 / false_action_rate=0。
+上表取每类故障的收官实验（里程碑口径）。验收过程的 12 行调参校准实验已应
+用户要求清理（关联事件保留、仅解除 experiment_id 外键），summary 收官快照：
+total_experiments=4（含 1 个未注入的创建态），overall
+diagnosis_accuracy=1.0 / recovery_rate=0.6667（cpu_overload 自动修复为
+能力缺口，见上节）/ avg_mttr_s=1260 / false_action_rate=0。
 
 \* oom 的 MTTR 含验收时的人工批准等待（当时后端正滚动部署，确认延迟约 23 分钟为人
 为因素）；排除后，从注入到 Agent 产出方案约 2 分钟、执行+验证约 4 分钟。
