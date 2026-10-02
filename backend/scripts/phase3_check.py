@@ -32,7 +32,7 @@ BASE = "http://127.0.0.1:8000"
 TARGET = "payment-service"
 # 轮询上限（秒）：关联窗口 10m + 闭环余量；cpu_overload 按 §7 放宽到 45m
 FINISHED_TIMEOUT = {"oom": 1200, "pod_crash": 1200, "cpu_overload": 2700}
-EVENT_TIMEOUT = 780  # 等关联事件出现（注入后告警触发 + 诊断启动）
+EVENT_TIMEOUT = 1320  # 等关联事件出现（关联窗口 20 分钟 + 轮询余量）
 POLL_INTERVAL = 15
 SETTLE_SECONDS = 90  # 实验间沉淀：等上一实验收尾还原的滚动更新稳定后再注入
 

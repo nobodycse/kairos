@@ -66,7 +66,9 @@ def _result_payload(result: ExperimentResult | None) -> dict | None:
     }
 
 
-def _exp_payload(exp: Experiment, result: ExperimentResult | None) -> dict:
+def _exp_payload(
+    exp: Experiment, result: ExperimentResult | None, assoc_event_id: int | None = None
+) -> dict:
     return {
         "id": exp.id,
         "fault_type": exp.fault_type,
@@ -77,7 +79,7 @@ def _exp_payload(exp: Experiment, result: ExperimentResult | None) -> dict:
         "injected_at": exp.injected_at,
         "created_at": exp.created_at,
         "last_error": (exp.params or {}).get("_last_error"),
-        "fault_event_id": result.fault_event_id if result else None,
+        "fault_event_id": (result.fault_event_id if result else None) or assoc_event_id,
         "result": _result_payload(result),
     }
 
@@ -88,6 +90,14 @@ async def _latest_result(db, experiment_id: int) -> ExperimentResult | None:
     stmt = select(ExperimentResult).filter_by(experiment_id=experiment_id_)
     rows = list((await db.execute(stmt)).scalars().all())
     return max(rows, key=lambda r: (r.created_at, r.id)) if rows else None
+
+
+async def _associated_event_id(db, experiment_id: int) -> int | None:
+    """已回填关联的事件 id（评估收敛前即暴露，§3.11 注记）。"""
+    experiment_id_ = experiment_id
+    stmt = select(FaultEvent).filter_by(experiment_id=experiment_id_)
+    rows = list((await db.execute(stmt)).scalars().all())
+    return rows[0].id if rows else None
 
 
 def _iso(dt: datetime) -> str:
@@ -157,7 +167,13 @@ async def list_experiments(db=Depends(get_db), _: str = Depends(require_user)):
     total = len(rows)
     items = []
     for exp in rows[:_LIST_LIMIT]:
-        items.append(_exp_payload(exp, await _latest_result(db, exp.id)))
+        items.append(
+            _exp_payload(
+                exp,
+                await _latest_result(db, exp.id),
+                await _associated_event_id(db, exp.id),
+            )
+        )
     return {"items": items, "total": total}
 
 
@@ -166,7 +182,11 @@ async def report(experiment_id: int, db=Depends(get_db), _: str = Depends(requir
     exp = await db.get(Experiment, experiment_id)
     if exp is None:
         raise HTTPException(status_code=404, detail="实验不存在")
-    return _exp_payload(exp, await _latest_result(db, experiment_id))
+    return _exp_payload(
+        exp,
+        await _latest_result(db, experiment_id),
+        await _associated_event_id(db, experiment_id),
+    )
 
 
 # ---------- compare（§3.11.2，Phase 3 新增） ----------

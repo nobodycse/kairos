@@ -478,7 +478,7 @@ reject 200：
 {"items": [{"id": 8, "fault_type": "oom", "target_ns": "demo", "target_workload": "payment-service", "params": {"memory_limit": "128Mi"}, "status": "finished", "injected_at": "...", "created_at": "...", "fault_event_id": 45, "result": {…§3.11 result…}}], "total": 8}
 ```
 
-`total` 为全部实验数（含进行中）；`params` 剥离下划线前缀的内部键（`_snapshot` 等不入契约）；`last_error` 为最近一次注入失败原因（成功注入后清除语义：仅 created 状态且有失败记录时非 null）。
+`total` 为全部实验数（含进行中）；`params` 剥离下划线前缀的内部键（`_snapshot` 等不入契约）；`last_error` 为最近一次注入失败原因（成功注入后清除语义：仅 created 状态且有失败记录时非 null）；`fault_event_id` 在关联回填后即返回（不必等闭环，Phase 3 服务器实测注记）。
 
 ### 3.11.2 GET /api/v1/experiments/{id}/compare（Phase 3 新增）
 
