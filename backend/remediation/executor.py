@@ -39,12 +39,18 @@ def _now() -> datetime:
 
 
 def _snapshot_of(dep, container: str | None = None) -> dict[str, Any]:
-    """执行前快照（§6.5：Deployment 当前资源）。container 供 limits 恢复定位。"""
+    """执行前快照（§6.5：Deployment 当前资源）。container 供 limits 恢复定位。
+
+    memory_request 一并入快照：回滚只恢复 limits 会与现存 requests 冲突
+    （requests ≤ limits 是 K8s 硬约束，fault-lab 的 oom 注入连 requests 一起
+    调低后，回滚缺 requests 会 422——服务器实测）。
+    """
     return {
         "replicas": dep.replicas,
         "image": dep.image,
         "cpu_limit": dep.cpu_limit,
         "memory_limit": dep.memory_limit,
+        "memory_request": dep.memory_request,
         "container": container,
     }
 
@@ -111,8 +117,14 @@ def _restore_body(snapshot: dict[str, Any]) -> dict[str, Any]:
         for k, v in (("cpu", snapshot.get("cpu_limit")), ("memory", snapshot.get("memory_limit")))
         if v
     }
+    requests = {"memory": snapshot["memory_request"]} if snapshot.get("memory_request") else {}
+    resources: dict[str, Any] = {}
     if limits:
-        container_patch["resources"] = {"limits": limits}
+        resources["limits"] = limits
+    if requests:
+        resources["requests"] = requests
+    if resources:
+        container_patch["resources"] = resources
     if container_patch:
         if not snapshot.get("container"):
             logger.warning("快照缺 container 名，跳过模板恢复（仅恢复 replicas）：%s", snapshot)

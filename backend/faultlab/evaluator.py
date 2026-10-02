@@ -204,7 +204,12 @@ async def _write_result(exp_id: int, ev_id: int | None, *, notes: str | None = N
         await db.commit()
         logger.info("实验 %s 评估落库：detected=%s finished", exp_id, detected)
 
-    # 收尾还原（finished 已落库；还原失败只记日志，phase3-plan §2.1 快照还原兜底）
+    # 收尾还原（finished 已落库；还原失败只记日志，phase3-plan §2.1 快照还原兜底）。
+    # 有关联事件时延迟 4 分钟：事件可能被 webhook 提前置 resolved 而 Agent 验证
+    # 窗口（3 分钟）仍在进行，立即还原的滚动更新会令 pod_ready 误判失败并诱发
+    # 回滚（服务器实测竞态）。无关联事件（未检出）无此竞争，立即还原。
+    if ev_id is not None:
+        await asyncio.sleep(240)
     from faultlab import restore_experiment  # 局部导入避免循环依赖
 
     try:
