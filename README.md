@@ -741,11 +741,11 @@ ai-k8s-ops/
 
 ## Phase 3：故障检测
 
-- [ ] CPU 异常检测
-- [ ] Memory 异常检测
-- [ ] Pod 重启检测
-- [ ] HTTP 错误率检测
-- [ ] 多指标关联分析
+- [x] CPU 异常检测（ContainerCPUHigh，join 对齐修复于 Phase 3 验收实测通过）
+- [x] Memory 异常检测（ContainerMemoryHigh，同上）
+- [x] Pod 重启检测（PodCrashLooping / PodOOMKilled）
+- [x] HTTP 错误率检测（HTTPErrorRateHigh）
+- [x] 多指标关联分析（Agent 证据链跨 K8s/Prometheus/Loki/Events 四源）
 
 ## Phase 4：AI Agent
 
@@ -772,19 +772,19 @@ ai-k8s-ops/
 
 ## Phase 7：故障实验室
 
-- [ ] CPU 故障
-- [ ] Memory 故障
-- [ ] Pod 故障
-- [ ] 网络故障
-- [ ] Node 故障
+- [x] CPU 故障（busybox 压力 Pod，Phase 3 交付）
+- [x] Memory 故障（调低 limit 至 32Mi 触发 OOMKilled，Phase 3 交付）
+- [x] Pod 故障（循环打崩 /internal/crash 触发 CrashLoopBackOff，Phase 3 交付）
+- [ ] 网络故障（砍单未做：无告警规则覆盖，phase3-plan §2.8）
+- [ ] Node 故障（砍单未做：破坏性大）
 
 ## Phase 8：实验评估
 
-- [ ] 建立故障测试集
-- [ ] 测试诊断准确率
-- [ ] 测试自动修复成功率
-- [ ] 测试 MTTR
-- [ ] 测试误操作率
+- [x] 建立故障测试集（三类注入实验，Phase 3 交付）
+- [x] 测试诊断准确率（docs/experiments.md 评估表）
+- [x] 测试自动修复成功率（同上；cpu_overload 自动修复不可达为如实结论）
+- [x] 测试 MTTR（同上）
+- [x] 测试误操作率（同上，remediation failed 审计口径）
 - [ ] 对比人工运维与 AI 运维效率
 
 ---

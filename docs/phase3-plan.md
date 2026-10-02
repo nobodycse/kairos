@@ -1,6 +1,6 @@
 # Phase 3 实施计划：故障实验室（fault-lab + experiments API + 评估汇总 + 前端两页）
 
-> 落盘日期：2026-10-01 ｜ 状态：**进行中**
+> 落盘日期：2026-10-01 ｜ 状态：**✅ 已完成（2026-10-02 收官：三类实验全部服务器实测闭环，评估表落 docs/experiments.md）**
 > 里程碑：**跑 3 类故障实验出评估表**（design.md §8.1 Phase 3；§8.4 砍单顺序取 oom / pod_crash / cpu_overload——现有告警规则能覆盖、能产出可评估事件的三类）
 
 ---
@@ -72,19 +72,24 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 
 ## 5. 提交拆分（后端 commit 前跑三套冒烟，前端 commit 前 npm build）
 
-1. `docs(phase3): phase3-plan.md 落盘`
-2. `feat(faultlab): 注入器三策略 + k8s pod 创建删除 + PodInfo.pod_ip + 单实验互斥`
-3. `feat(experiments)：experiments/reports 接真 DB + 关联回填/评估器/启动恢复 + compare 接口 + 删 mock.py`
-4. `feat(frontend)：LabView 重做 + HistoryView 图表 + compare 曲线`
-5. `test+docs：phase3_check.py（服务器跑 3 类实验）+ experiments.md 评估表 + §8.1 注记 + 收官`
+1. [x] `docs(phase3): phase3-plan.md 落盘`（19242a0）
+2. [x] `feat(faultlab): 注入器三策略 + k8s pod 创建删除 + PodInfo.pod_ip + 单实验互斥`（fd9b34f，含评估器一并入库）
+3. [x] `feat(experiments)：experiments/reports 接真 DB + 关联回填/评估器/启动恢复 + compare 接口 + 删 mock.py`（c6a785a）
+4. [x] `feat(frontend)：LabView 重做 + HistoryView 图表 + compare 曲线`（f76fc8e）
+5. [x] `test+docs：phase3_check.py + experiments.md 评估表 + §8.1 注记 + 收官`（验收脚本随 c6a785a 入库，收官文档随本次）
+   - 服务器验收追加六轮修复 commit：76c481a / 9d5b4dc / 0231d6c / ffc9d44 / 722458b / 0ad67f2 / a424375（每轮一轮实测回归，过程记 §9）
 
-## 6. 服务器验收（我代跑，`scripts/phase3_check.py`）
+## 6. 服务器验收（我代跑，`backend/scripts/phase3_check.py`）
 
-- [ ] push → webhook 自动部署 → /health OK
-- [ ] 三类实验各跑一次：create→inject→等待关联事件→（awaiting_approval 自动 approve）→等待闭环→report 断言（detected/diagnosed_correctly/结果字段）+ summary 断言 + compare 断言
-- [ ] 预期时长：oom ~5 分钟、pod_crash ~8 分钟（4 次打崩）、cpu_overload ~12 分钟（ContainerCPUHigh for 5m）；cpu_overload 监听超时已放宽到 40 分钟
-- [ ] 评估表写入 docs/experiments.md（现 0 字节）；前端页面联调由用户在浏览器复核
-- [ ] design.md §8.1 Phase 3 注记 + phase3-plan 全部勾选 = 收官
+- [x] push → webhook 自动部署 → /health OK
+- [x] 三类实验各跑一次：create→inject→等待关联事件→（awaiting_approval 自动 approve）→等待闭环→report 断言（detected/diagnosed_correctly/结果字段）+ summary 断言 + compare 断言
+  - oom（实验 #9）：检出 28s / 诊断 OOM 正确 / 自动恢复（MTTR 1980s，含人为批准延迟）/ 无误操作
+  - pod_crash（实验 #5）：检出 148s / 诊断 CrashLoop 正确 / 自动恢复（MTTR 540s）/ 无误操作
+  - cpu_overload（实验 #13）：检出 608s / 诊断 ContainerCPUHigh 正确 / 自动修复 ✗（动作集不含删 Pod 的能力缺口，如实记录）
+- [x] 预期时长实际值：oom ~5 分钟（不含人为延迟）、pod_crash ~11 分钟（4 次打崩 + 修复验证）、cpu_overload ~14 分钟（T+10min firing + 诊断）
+- [x] 评估表写入 docs/experiments.md（0 字节 → 完整评估表 + 明细 + 发现问题清单）；前端页面联调由用户在浏览器复核
+- [x] design.md §8.1 Phase 3 注记 + phase3-plan 全部勾选 = 收官
+- [x] 验收过程抓出 8 类问题并逐一修复（告警规则 join 失效 / oom 剂量 / 挂起图竞态 / 告警结构性延迟 / RE2 转义 / RCA 落库缺口 / 流量缺失 / 镜像不可得），详见 §9 与 experiments.md §四
 
 ## 7. 风险与预案（design.md §8.4）
 
@@ -113,4 +118,12 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 | 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
 | 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | fd9b34f | 评估器随模块一并入库（API 接线在下一 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |
 | 2026-10-01 | experiments/reports 接真 DB + compare + 删 mock.py + 契约文档 | c6a785a | design §3.11.1/§3.11.2 + architecture §12 补两行；phase3_check.py 入库 |
-| 2026-10-01 | 前端：LabView 重做 + HistoryView 图表 + services 封装 | 本次 | npm build（vue-tsc+vite）通过；compare 仅 auto_recovered 后拉取 |
+| 2026-10-01 | 前端：LabView 重做 + HistoryView 图表 + services 封装 | f76fc8e | npm build（vue-tsc+vite）通过；compare 仅 auto_recovered 后拉取 |
+| 2026-10-02 | 预检：backend→Pod IP 可达 ✓；stress-ng 镜像 403 → busybox 方案 | 76c481a | DaoCloud 加速白名单拒绝 polinux/stress-ng；busybox crictl 预热通过 |
+| 2026-10-02 | 服务器首轮验收：三类全未检出 → 定位三个独立根因 | 9d5b4dc | 规则 join 失效（两规则从未触发过）/ 128Mi 不触发 OOM（实测 32Mi 才行）/ crash 目标被滚动更新竞态替换；同时补 logging.basicConfig |
+| 2026-10-02 | 第二轮：pod_crash 全链路 PASS；oom 撞挂起图竞态；cpu 告警抖动 | 0231d6c | 实验 #5 检出 148s/恢复 540s ✓；事件 awaiting_approval 被重跑清图（trigger 补挂起保护）；双 loop 使用率回落 0.71<0.9（改 4 loop）；demo 无流量（增 load-generator） |
+| 2026-10-02 | 第三轮：关联窗口差秒级错过 + Agent 提案超白名单 | ffc9d44 | ContainerCPUHigh 结构性 T+10min firing（rate[5m] 填充+for 5m）→ 关联窗口 10→20 分钟；PROPOSE_SYSTEM 补 0.5x–4x 边界提示 |
+| 2026-10-02 | 第四轮：部署重启打断实验 → 启动恢复实测通过；report 契约补关联暴露 | 722458b | recover_experiments 恢复监听并关联事件 ✓、trigger 挂起保护实测日志 ✓；report 的 fault_event_id 收敛前即返回；人工批准救活 oom 实验 #9（满血闭环：28s/OOM/恢复/1980s） |
+| 2026-10-02 | 第五轮：cpu_overload 事件 30s failed——门控拒绝不落 RCA | 0ad67f2 | 修复动作集对 bare Pod 结构性无解（白名单拒绝）；gate 拒绝分支补落 Diagnosis；check 收尾断言容忍 Terminating；另发现 .env.example 历史泄漏 key 并从 HEAD 移除（历史含该 key，需轮换） |
+| 2026-10-02 | 第六轮：诊断落库但前缀映射误判 | a424375 | Agent 输出 ContainerCPUHigh（与告警同名）不匹配 CPU* 前缀 → 映射表补告警同名类型，11 例断言全过 |
+| 2026-10-02 | 第七轮：cpu_overload 收官 + compare 曲线全通 + 文档收官 | 本次 | 实验 #13 检出 608s/诊断正确/恢复 ✗（能力缺口如实记录）；compare 四指标双窗口全有数据（RE2 修复+or vector(0)）；experiments.md 评估表 + README Phase 3/7/8 勾选 + design §8.1 注记 = **Phase 3 收官** |
