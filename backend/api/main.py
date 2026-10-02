@@ -6,6 +6,8 @@ Phase 1 起：登录真连 users 表，cluster/faults 等仍为 stub。
 """
 from contextlib import asynccontextmanager
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,6 +17,10 @@ from core.db import engine
 from core.redis import close as redis_close, ping as redis_ping
 from faultlab import recover_experiments
 from monitoring.clients import close_clients, init_clients
+
+# uvicorn 只配置自己的 logger，应用模块的 INFO（faultlab 监听/诊断轮次）会被
+# 根 logger 的 WARNING 级吞掉——补一行基础配置让 docker logs 可见
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager

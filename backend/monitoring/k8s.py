@@ -221,6 +221,7 @@ class K8sClient:
     def _to_deployment_info(dep) -> DeploymentInfo:
         containers = dep.spec.template.spec.containers or []
         limits = containers[0].resources.limits if containers else None
+        requests = containers[0].resources.requests if containers else None
         return DeploymentInfo(
             namespace=dep.metadata.namespace,
             name=dep.metadata.name,
@@ -229,6 +230,7 @@ class K8sClient:
             image=containers[0].image if containers else "",
             cpu_limit=(limits or {}).get("cpu"),
             memory_limit=(limits or {}).get("memory"),
+            memory_request=(requests or {}).get("memory"),
             labels=dict(dep.metadata.labels or {}),
             container=containers[0].name if containers else None,
         )

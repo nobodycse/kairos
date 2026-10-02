@@ -3,10 +3,11 @@
 全部只作用于 demo namespace（§10 引言）。注入器只负责"把故障放进集群"并
 尽量自清理半途产物；事件关联、评估与实验收尾在 evaluator.py。
 
-- oom：patch 目标 Deployment memory_limit → params.memory_limit（默认 128Mi）。
+- oom：patch 目标 Deployment memory 的 requests+limits → params.memory_limit
+  （默认 32Mi，服务器实测见 OOM_DEFAULT_MEMORY_LIMIT 注记）。
   改模板触发滚动更新，新副本以低 limit 启动 → OOMKilled → PodOOMKilled 规则。
   原值快照交由调用方存 experiment.params._snapshot，实验结束自动还原
-  （Agent 若提案调回，128Mi→512Mi=4x 恰好在白名单 0.5x–4x 内）。
+  （Agent 若提案调回，32Mi→128Mi=4x 恰好在白名单 0.5x–4x 内）。
 - pod_crash：取目标 workload 的一个 Pod IP，POST /internal/crash 打崩一次
   （demo-app 收到请求即 os._exit(1)，响应不会返回——连接被重置即送达）；
   crash_loop 后台继续循环打崩直到重启增量 ≥4（PodCrashLooping 规则
@@ -40,7 +41,10 @@ CRASH_POD_KEY = "_crash_pod"  # pod_crash：被打崩的 Pod 名
 CRASH_IP_KEY = "_crash_ip"  # pod_crash：Pod IP
 CRASH_BASELINE_KEY = "_crash_baseline_restarts"  # pod_crash：注入前重启计数
 
-OOM_DEFAULT_MEMORY_LIMIT = "128Mi"
+# 服务器实测（2026-10-02）：demo-app 工作集 ~37MB 且随 limit 自适应，128Mi/64Mi/48Mi
+# 均不触发 OOM；32Mi（requests 同步调低）稳定 OOMKilled。修复提案白名单按当前值
+# 0.5x–4x 校验：32Mi→128Mi=4x 在界内可止血，更高提案会被拒转 failed（如实评估）。
+OOM_DEFAULT_MEMORY_LIMIT = "32Mi"
 # polinux/stress-ng 被 DaoCloud 镜像加速白名单拒绝（服务器实测 403，phase3-plan §7）；
 # 改用预热的 busybox：两个 busy loop 各占满一核（cgroup 限 200m → 使用率/限额 ≈1.0
 # > 0.9 阈值），900s 后父进程收工退出（等价 stress-ng --timeout 900s 自止语义）
@@ -132,6 +136,7 @@ async def inject_oom(exp) -> dict:
     if not dep.container:
         raise InjectorError(f"目标 {ns}/{target} 无容器，无法调整 limit")
     new_limit = (exp.params or {}).get("memory_limit") or OOM_DEFAULT_MEMORY_LIMIT
+    # requests 必须同步调低（K8s 要求 requests ≤ limits，否则 patch 422）
     body = {
         "spec": {
             "template": {
@@ -139,7 +144,10 @@ async def inject_oom(exp) -> dict:
                     "containers": [
                         {
                             "name": dep.container,
-                            "resources": {"limits": {"memory": new_limit}},
+                            "resources": {
+                                "requests": {"memory": new_limit},
+                                "limits": {"memory": new_limit},
+                            },
                         }
                     ]
                 }
@@ -150,6 +158,7 @@ async def inject_oom(exp) -> dict:
     snapshot = {
         "container": dep.container,
         "memory_limit": dep.memory_limit,
+        "memory_request": dep.memory_request,
         "cpu_limit": dep.cpu_limit,
     }
     await _audit_inject(
@@ -243,8 +252,10 @@ async def _wait_stress_ready(ns: str, pod_name: str) -> None:
 
 async def crash_loop(exp_id: int) -> None:
     """循环打崩（phase3-plan §2.2）：重启增量 ≥4 且事件已关联 → 停；Pod 消失
-    或 8 分钟上限收敛。事件关联后即停手：继续打崩会干扰 Agent 修复与验证
-    （restart_deployment 替换 Pod 后旧 IP 自然不可达，也构成隐式终止条件）。"""
+    或 8 分钟上限收敛。事件关联后即停手：继续打崩会干扰 Agent 修复与验证。
+
+    目标 Pod 消失且事件未关联（如上一实验收尾的滚动更新恰好替换了目标 Pod）
+    时重选一个目标继续（上限 3 次）；关联后消失 = 修复生效，直接终止。"""
     from faultlab import evaluator  # 局部导入避免循环依赖
     from models import Experiment
 
@@ -253,6 +264,7 @@ async def crash_loop(exp_id: int) -> None:
         if exp is None:
             return
         ns = exp.target_ns
+        workload = exp.target_workload
         params = dict(exp.params or {})
     pod_name = params.get(CRASH_POD_KEY)
     ip = params.get(CRASH_IP_KEY)
@@ -263,6 +275,7 @@ async def crash_loop(exp_id: int) -> None:
 
     deadline = _now() + CRASH_CAP_SECONDS
     cycles = 0
+    repicks = 0
     try:
         while _now() < deadline:
             associated = await evaluator.event_associated(exp_id)
@@ -270,7 +283,20 @@ async def crash_loop(exp_id: int) -> None:
                 return
             pod = await clients.k8s.get_pod(ns, pod_name)
             if pod is None:
-                return  # 被修复动作替换/删除 → 终止
+                if associated or repicks >= 3:
+                    return  # 关联后消失=修复替换生效；重选耗尽收敛
+                try:
+                    pod = await _target_pod(ns, workload)
+                except InjectorError:
+                    return  # workload 下已无 Pod
+                repicks += 1
+                pod_name = pod.name
+                ip = pod.pod_ip or ip
+                baseline = pod.restarts
+                logger.info(
+                    "crash_loop：原目标消失，重选 %s/%s（ip=%s）", ns, pod_name, ip
+                )
+                continue
             if pod.restarts > baseline:
                 baseline = pod.restarts
                 cycles += 1

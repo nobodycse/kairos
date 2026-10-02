@@ -31,9 +31,10 @@ from core.config import settings  # noqa: E402
 BASE = "http://127.0.0.1:8000"
 TARGET = "payment-service"
 # 轮询上限（秒）：关联窗口 10m + 闭环余量；cpu_overload 按 §7 放宽到 45m
-FINISHED_TIMEOUT = {"oom": 900, "pod_crash": 900, "cpu_overload": 2700}
+FINISHED_TIMEOUT = {"oom": 1200, "pod_crash": 1200, "cpu_overload": 2700}
 EVENT_TIMEOUT = 780  # 等关联事件出现（注入后告警触发 + 诊断启动）
 POLL_INTERVAL = 15
+SETTLE_SECONDS = 90  # 实验间沉淀：等上一实验收尾还原的滚动更新稳定后再注入
 
 SUPPORTED = ("oom", "pod_crash", "cpu_overload")
 
@@ -101,14 +102,8 @@ def run_experiment(c: httpx.Client, fault_type: str) -> dict:
     limit_before = deployment_limit(c, "demo", TARGET)
     _log(f"注入前 {TARGET} memory_limit={limit_before}")
 
-    r = c.post(
-        "/api/v1/experiments",
-        json={
-            "fault_type": fault_type,
-            "target_workload": TARGET,
-            "params": {"memory_limit": "128Mi"} if fault_type == "oom" else {},
-        },
-    )
+    # oom 用后端默认值（32Mi，服务器实测 64/48Mi 不触发 OOM）；其余类型无参数
+    r = c.post("/api/v1/experiments", json={"fault_type": fault_type, "target_workload": TARGET})
     if r.status_code != 201:
         raise AssertionError(f"创建实验失败 {r.status_code}：{r.text[:200]}")
     exp = r.json()
@@ -250,7 +245,10 @@ def main() -> int:
     runs: dict[str, dict] = {}
     with _c() as c:
         login(c)
-        for ft in targets:
+        for idx, ft in enumerate(targets):
+            if idx > 0:
+                _log(f"沉淀等待 {SETTLE_SECONDS}s（上一实验收尾还原的滚动更新稳定）")
+                time.sleep(SETTLE_SECONDS)
             try:
                 runs[ft] = run_experiment(c, ft)
             except Exception as e:  # noqa: BLE001  单类失败继续跑其余，最后统一退出码

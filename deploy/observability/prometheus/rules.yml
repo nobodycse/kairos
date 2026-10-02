@@ -1,8 +1,6 @@
 # KAIROS 告警规则（architecture.md §4.1，共 7 条）
-# PromQL 与文档保持一致；标注 VERIFY 的规则在 Phase 1 联调时按实际指标名验证——
-# 特别是跨数据源 join：ContainerMemoryHigh / ContainerCPUHigh 的分子来自 cAdvisor、
-# 分母来自 kube-state-metrics，两侧 label 不完全相同，可能需要补
-# on(namespace, pod, container) 对齐（文档已注明"表达式以实际指标名为准"）。
+# 标注 VERIFY 的规则以实际指标名为准逐一验证：PodOOMKilled 于 Phase 2 修复，
+# ContainerMemoryHigh / ContainerCPUHigh 于 Phase 3 服务器实测修复（join 对齐）。
 groups:
   - name: kairos-alerts
     rules:
@@ -27,18 +25,20 @@ groups:
         annotations:
           summary: "{{ $labels.namespace }}/{{ $labels.pod }} 容器被 OOMKilled（10 分钟内）"
 
-      # VERIFY: 跨 cAdvisor / kube-state-metrics 两个 job 的指标相除，需验证 join
+      # VERIFY→已验证（Phase 3 服务器实测修复，2026-10-02）：cAdvisor 与
+      # kube-state-metrics 分属两个 job，instance 等标签不一致，直接相除 join
+      # 不上（空序列=规则从未触发过）。双侧按 namespace/pod/container 聚合后
+      # on() 对齐（实测：CPU 比值稳态 1.0、内存比值 0.07 均出序列）。
       - alert: ContainerMemoryHigh
-        expr: container_memory_working_set_bytes / kube_pod_container_resource_limits{resource="memory"} > 0.95
+        expr: sum by (namespace, pod, container) (container_memory_working_set_bytes{container!="",container!="POD"}) / on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"}) > 0.95
         for: 3m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.namespace }}/{{ $labels.pod }} 内存使用率持续超过 95%"
 
-      # VERIFY: 同上
       - alert: ContainerCPUHigh
-        expr: rate(container_cpu_usage_seconds_total[5m]) / kube_pod_container_resource_limits{resource="cpu"} > 0.9
+        expr: sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) / on (namespace, pod, container) max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="cpu"}) > 0.9
         for: 5m
         labels:
           severity: warning

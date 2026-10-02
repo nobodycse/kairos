@@ -45,6 +45,7 @@ class DeploymentInfo(BaseModel):
     image: str
     cpu_limit: str | None  # K8s quantity 原样（"500m"）
     memory_limit: str | None  # K8s quantity 原样（"512Mi"）
+    memory_request: str | None = None  # K8s quantity 原样（Phase 3 oom 注入连 request 一起调低）
     labels: dict[str, str] = {}  # metadata.labels（白名单 kairos.io/managed 检查用）
     container: str | None = None  # 首容器名（Phase 3 fault-lab oom 快照/还原定位用）
 

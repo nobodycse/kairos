@@ -148,13 +148,16 @@ async def restore_experiment(exp_id: int) -> None:
         memory_limit = snapshot.get("memory_limit")
         if not (container and memory_limit):
             return  # 注入未落到 patch（无快照）→ 无需还原
+        resources: dict = {"limits": {"memory": memory_limit}}
+        memory_request = snapshot.get("memory_request")
+        if memory_request:
+            # 注入时连 requests 一起调低了（K8s 要求 requests ≤ limits），还原同步
+            resources["requests"] = {"memory": memory_request}
         body = {
             "spec": {
                 "template": {
                     "spec": {
-                        "containers": [
-                            {"name": container, "resources": {"limits": {"memory": memory_limit}}}
-                        ]
+                        "containers": [{"name": container, "resources": resources}]
                     }
                 }
             }
