@@ -64,3 +64,32 @@ spec:
       port: 8000
       targetPort: 8000
       nodePort: 30780
+---
+# 负载发生器（Phase 3 增补）：持续打 /pay 产生 QPS/延迟/5xx 指标——
+# 验证模块的错误率/P95 检查与实验 compare 曲线都需要真实流量（此前无流量，曲线为空）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+  namespace: demo
+  labels:
+    app: load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: load-generator
+  template:
+    metadata:
+      labels:
+        app: load-generator
+    spec:
+      containers:
+        - name: load
+          image: busybox:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - "while true; do wget -q -O- http://payment-service:8000/pay >/dev/null 2>&1 || true; sleep 0.2; done"
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}

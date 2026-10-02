@@ -81,8 +81,13 @@ def stress_pod_exists(c: httpx.Client, pod_name: str) -> bool:
 
 
 def approve_pending(c: httpx.Client, fault_event_id: int) -> bool:
-    """事件 awaiting_approval 时批准全部 pending 提案（返回是否有动作）。"""
+    """事件 awaiting_approval 时批准全部 pending 提案（返回是否有动作）。
+
+    只在 awaiting_approval 时批准：事件已终态（评估器收敛过）时批准无意义，
+    还会在 faultlab 还原后撞执行器白名单（服务器首轮实测教训）。"""
     detail = c.get(f"/api/v1/faults/{fault_event_id}").json()
+    if detail.get("status") != "awaiting_approval":
+        return False
     acted = False
     for rem in detail.get("remediations") or []:
         if rem.get("status") == "pending":
@@ -169,11 +174,21 @@ def run_experiment(c: httpx.Client, fault_type: str) -> dict:
     return {"exp_id": exp_id, "fault_event_id": fault_event_id, "result": result}
 
 
+_AUDIT_LOOP = None  # asyncpg 连接池绑定首个 loop，全程复用（重复 asyncio.run 会跨 loop 报错）
+
+
 def _print_faultlab_audits(exp_id: int) -> None:
     """打印该实验的注入/还原审计（text()+绑定参数，Mimosa 误报绕行写法）。"""
+    import asyncio
+
     from sqlalchemy import text
 
     from core.db import SessionLocal
+
+    global _AUDIT_LOOP
+    if _AUDIT_LOOP is None:
+        _AUDIT_LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(_AUDIT_LOOP)
 
     async def _q():
         async with SessionLocal() as db:
@@ -189,9 +204,7 @@ def _print_faultlab_audits(exp_id: int) -> None:
             return rows.all()
 
     try:
-        import asyncio
-
-        for action, result, resource, _created in asyncio.run(_q()):
+        for action, result, resource, _created in _AUDIT_LOOP.run_until_complete(_q()):
             _log(f"audit {action} {result} {resource}")
     except Exception as e:  # noqa: BLE001  审计打印失败不影响验收主流程
         _log(f"审计打印跳过：{e}")

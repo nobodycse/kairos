@@ -46,14 +46,14 @@ CRASH_BASELINE_KEY = "_crash_baseline_restarts"  # pod_crash：注入前重启�
 # 0.5x–4x 校验：32Mi→128Mi=4x 在界内可止血，更高提案会被拒转 failed（如实评估）。
 OOM_DEFAULT_MEMORY_LIMIT = "32Mi"
 # polinux/stress-ng 被 DaoCloud 镜像加速白名单拒绝（服务器实测 403，phase3-plan §7）；
-# 改用预热的 busybox：两个 busy loop 各占满一核（cgroup 限 200m → 使用率/限额 ≈1.0
-# > 0.9 阈值），900s 后父进程收工退出（等价 stress-ng --timeout 900s 自止语义）
+# 改用预热的 busybox：4 个 busy loop 需求远超 0.2 核配额 → 使用率/限额稳定 ≈1.0
+# （双 loop 实测会因 CFS 限流回落到 0.71 < 0.9 阈值，告警抖动），900s 后自止
 STRESS_IMAGE = "busybox:latest"
 STRESS_CPU_COMMAND = [
     "/bin/sh",
     "-c",
-    "while :; do :; done & W1=$!; while :; do :; done & W2=$!; "
-    "sleep 900; kill $W1 $W2 2>/dev/null; wait",
+    "for i in 1 2 3 4; do while :; do :; done & done; "
+    "sleep 900; kill 0",
 ]
 STRESS_CPU_LIMIT = "200m"  # ContainerCPUHigh 阈值 0.9：2 核需求 / 0.2 核限额 ≈ 10
 CRASH_PORT = 8000

@@ -56,7 +56,16 @@ async def trigger(fault_event_id: int) -> bool:
     """抢锁成功则后台运行诊断图；返回是否触发（§5.3.3/§5.5）。
 
     抢锁失败 = 该事件已有 graph 在跑：webhook 静默跳过，diagnose 映射 409。
+    awaiting_approval = 存在挂起图（MemorySaver，interrupt 后 runner 任务已结束、
+    锁已释放）：新告警并入不能重跑诊断，否则新图清掉挂起状态、人工确认窗被打断
+    （Phase 3 服务器实测抓出：OOM 事件等确认期间 CrashLoop 告警并入 → 重跑 →
+    LLM 输出失败置 failed）。挂起图由 approve/reject 恢复。
     """
+    async with SessionLocal() as db:
+        ev = await db.get(FaultEvent, fault_event_id)
+        if ev is not None and ev.status == "awaiting_approval":
+            logger.info("trigger 跳过：事件 %s 等待人工确认（挂起图待 resume）", fault_event_id)
+            return False
     setted = await redis.set(_lock_key(fault_event_id), "1", nx=True, ex=_LOCK_TTL)
     if not setted:
         logger.info("trigger 跳过：事件 %s 已在运行（锁占用）", fault_event_id)
