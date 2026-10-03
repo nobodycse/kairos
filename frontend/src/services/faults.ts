@@ -67,6 +67,7 @@ export interface Remediation {
     | 'scale_deployment'
     | 'restart_deployment'
     | 'rollback_deployment'
+    | 'delete_pod'
   namespace: string
   target: string
   params: Record<string, unknown>

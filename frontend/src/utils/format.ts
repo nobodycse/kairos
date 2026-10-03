@@ -69,6 +69,7 @@ export const ACTION_LABELS: Record<string, string> = {
   scale_deployment: '调整副本数',
   restart_deployment: '重启工作负载',
   rollback_deployment: '回滚发布',
+  delete_pod: '删除异常 Pod',
 }
 
 type TagType = 'success' | 'warning' | 'danger' | 'info' | 'primary'

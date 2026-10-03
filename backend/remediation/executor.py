@@ -7,6 +7,11 @@ replace（§6.5 L367）。
 rollback_deployment 执行语义（文档未定义，落地决策 §一.1）：按该 workload
 最近一次已执行动作（status=succeeded 且 snapshot 非空）的快照恢复——与验证
 不过的自动回滚同一机制；无快照可回滚则执行失败。
+
+delete_pod 执行语义（phase4-plan §2.3，破坏性动作）：target 是 Pod 名——
+Pod 快照（phase/重启数/owner）先落库 → 删除 Pod（白名单保证只能是独立
+Pod）→ 审计。**不可回滚**：Pod 无法复活，rollback() 对该动作短路返回
+success=False，验证不过即走既有 failed 路径转人工，不做任何恢复尝试。
 """
 import logging
 from datetime import datetime, timezone
@@ -173,7 +178,7 @@ async def _latest_succeeded_row(
 async def execute(
     db: AsyncSession, fault_event_id: int, plan, decision: Decision
 ) -> ExecResult:
-    """执行修复提案（§6.5）：白名单 → 快照落库 → patch → 审计。"""
+    """执行修复提案（§6.5）：白名单 → 快照落库 → patch/删除 → 审计。"""
     # 1) 白名单再校验（拒绝时自带 denied 审计，§11.1 防线兜底）
     wl = await whitelist_validate(db, plan)
     if not wl.allowed:
@@ -182,6 +187,9 @@ async def execute(
     rem = await _find_remediation(db, fault_event_id, plan.action)
     if rem is None:
         return ExecResult(success=False, message="找不到对应的修复提案记录")
+    # delete_pod 走独立分支：target 是 Pod 名，无 patch/回滚语义（phase4-plan §2.3）
+    if plan.action == "delete_pod":
+        return await _execute_delete_pod(db, plan, rem)
     # 3) 快照先落库（顺序不可颠倒，否则无法恢复）
     dep = await clients.k8s.get_deployment(plan.namespace, plan.target)
     if dep is None:
@@ -229,8 +237,66 @@ async def execute(
     return ExecResult(success=True, message=f"{plan.action} 执行成功")
 
 
+async def _execute_delete_pod(db: AsyncSession, plan, rem) -> ExecResult:
+    """delete_pod 分支（phase4-plan §2.3）：Pod 快照先落库 → 删除 → 审计。
+
+    快照留 Pod 名/phase/重启数/owner 供事后还原现场（仅审计语义，不用于恢复——
+    Pod 删除不可逆，白名单已保证目标只能是独立 Pod）。
+    """
+    pod = await clients.k8s.get_pod(plan.namespace, plan.target)
+    if pod is None:
+        return ExecResult(success=False, message=f"目标 Pod {plan.namespace}/{plan.target} 不存在")
+    snapshot = {
+        "kind": "pod",
+        "name": pod.name,
+        "phase": pod.phase,
+        "status": pod.status,
+        "restarts": pod.restarts,
+        "workload": pod.workload,  # None = 独立 Pod（白名单已保证放行口径）
+        "node": pod.node,
+    }
+    rem.snapshot = snapshot
+    rem.status = "executing"
+    await db.commit()
+    resource = resource_for("pod", plan.namespace, plan.target)
+    await write_audit(
+        db, actor="agent", action=plan.action, resource=resource,
+        params=plan.params, result="allowed",
+        detail={"stage": "before", "snapshot": snapshot, "reason": plan.reason},
+    )
+    try:
+        await clients.k8s.delete_namespaced_pod(plan.namespace, plan.target)
+    except Exception as e:
+        logger.exception("删除 Pod 失败 %s/%s", plan.namespace, plan.target)
+        rem.status = "failed"
+        await db.commit()
+        await write_audit(
+            db, actor="agent", action=plan.action, resource=resource,
+            params=plan.params, result="failure",
+            detail={"stage": "after", "error": str(e)[:300], "snapshot": snapshot},
+        )
+        return ExecResult(success=False, message=f"删除 Pod 失败：{e}")
+    rem.status = "succeeded"
+    rem.executed_at = _now()
+    await db.commit()
+    await write_audit(
+        db, actor="agent", action=plan.action, resource=resource,
+        params=plan.params, result="success",
+        detail={"stage": "after", "snapshot": snapshot,
+                "note": "Pod 已删除（不可逆动作，无恢复语义）"},
+    )
+    return ExecResult(success=True, message=f"{plan.action} 执行成功：Pod {plan.target} 已删除（不可回滚）")
+
+
 async def rollback(db: AsyncSession, fault_event_id: int, plan) -> ExecResult:
-    """验证不过的自动回滚（§6.5 rollback / §7.1 RB 分支）：按快照恢复。"""
+    """验证不过的自动回滚（§6.5 rollback / §7.1 RB 分支）：按快照恢复。
+
+    delete_pod 不可回滚（Pod 无法复活）：短路返回失败——rollback_node 据此
+    置 outcome=failed 转人工，不产生任何集群写操作（对已删除的 Pod 名 patch
+    Deployment 既是语义错误也有同名碰撞的理论风险）。
+    """
+    if plan.action == "delete_pod":
+        return ExecResult(success=False, message="delete_pod 不可回滚（Pod 无法复活），转人工处理")
     source = await _latest_succeeded_row(db, fault_event_id, plan.namespace, plan.target)
     if source is None or not source.snapshot:
         return ExecResult(success=False, message="无快照可回滚")
