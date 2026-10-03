@@ -320,7 +320,7 @@ agent/
 ├── graph.py        # StateGraph 构建（节点、边、interrupt）
 ├── state.py        # AgentState TypedDict
 ├── llm.py          # LLM 适配层
-├── tools/          # 12 个工具
+├── tools/          # 13 个工具（8 查询 + 5 修复参数 schema）
 ├── planner/        # 假设生成与调查计划
 ├── diagnosis/      # 分析节点：证据 → RCA
 └── executor/       # 修复动作执行节点
@@ -353,9 +353,9 @@ class RCAReport(BaseModel):
 ```python
 class RemediationPlan(BaseModel):
     action: Literal["update_resource_limit", "scale_deployment",
-                    "restart_deployment", "rollback_deployment"]
+                    "restart_deployment", "rollback_deployment", "delete_pod"]
     namespace: str
-    target: str                    # workload 名
+    target: str                    # workload 名；delete_pod 时为 Pod 名
     params: dict                   # 如 {"memory_limit": "1Gi"}
     reason: str
 
@@ -378,6 +378,7 @@ RISK_POLICY: dict[str, tuple[RiskLevel, Policy]] = {
     "scale_deployment":       (MEDIUM,   Policy.REQUIRE_APPROVAL),
     "restart_deployment":     (MEDIUM,   Policy.REQUIRE_APPROVAL),
     "rollback_deployment":    (HIGH,     Policy.REQUIRE_APPROVAL),
+    "delete_pod":             (HIGH,     Policy.REQUIRE_APPROVAL),  # 不可逆，仅限独立 Pod（§11.1）
     "delete_node":            (CRITICAL, Policy.FORBIDDEN),
 }   # 未注册动作一律视为 CRITICAL/FORBIDDEN（默认拒绝）
 
@@ -443,7 +444,7 @@ class AgentState(TypedDict):
 
 ### 7.2 工具层
 
-`agent/tools/` 注册 12 个工具，每个工具 = pydantic 参数 schema + 执行函数 + 风险等级标注。查询类工具直接透传给 LLM 的 function calling；修复类工具**不进入 LLM 可自主调用的工具列表**，只能由 `propose_fix` 节点以结构化输出提议、经 risk_gate 后由 executor 执行——这是"LLM 不持有写权限"的关键。
+`agent/tools/` 注册 13 个工具，每个工具 = pydantic 参数 schema + 执行函数 + 风险等级标注。查询类工具直接透传给 LLM 的 function calling；修复类工具**不进入 LLM 可自主调用的工具列表**，只能由 `propose_fix` 节点以结构化输出提议、经 risk_gate 后由 executor 执行——这是"LLM 不持有写权限"的关键。
 
 | 工具 | 数据源 | 返回 |
 |---|---|---|
@@ -454,7 +455,7 @@ class AgentState(TypedDict):
 | get_deployment | K8s API | 副本/镜像/resources |
 | get_node_status | K8s API | 节点条件/资源分配 |
 | get_service_status | K8s API + Prometheus | Endpoints + 流量 |
-| update_resource_limit / scale_deployment / restart_deployment / rollback_deployment | —（仅提议层） | 经 risk_gate 人工/自动执行 |
+| update_resource_limit / scale_deployment / restart_deployment / rollback_deployment / delete_pod | —（仅提议层） | 经 risk_gate 人工/自动执行（delete_pod 仅限独立 Pod，§11.1） |
 
 ### 7.3 LLM 适配层
 
@@ -559,6 +560,7 @@ LLM 提议 → 参数白名单校验 → risk_control.decide() → (人工确认
 
 - **工具隔离**：LLM 只能调用查询工具；修复动作只能经 `propose_fix` 结构化输出提议（§7.2）。
 - **参数白名单**（防幻觉）：`namespace ∈ {demo}`；`scale_deployment.replicas ∈ [0, 10]`；`update_resource_limit` 只允许在当前值的 0.5x–4x 区间内调整；目标 workload 必须存在且带 `kairos.io/managed=true` 标签。任一越界 → 直接拒绝，记审计。
+- **破坏性动作边界**（Phase 4）：`delete_pod` 只允许删除**不属于任何工作负载的独立 Pod**（ownerReferences 无 Deployment/StatefulSet/DaemonSet，即流氓/压测 Pod）——凡属于受管工作负载的 Pod 一律拒绝并记 denied 审计，**Agent 永远不能删业务 Pod**；该动作不可逆，rollback 语义为"不回滚、转人工"。
 - **风险策略**：§6.6 策略表，未注册动作默认 FORBIDDEN。
 - **凭证**：开发期 backend 用 k3s.yaml（admin 权限）+ 工具层白名单兜底；文档化后续项——生产应改用专用 ServiceAccount + 最小 RBAC。
 - **审计**：所有写操作（含人工 approve/reject）前后快照入 audit_logs，实验报告的误操作率从这里统计。

@@ -1,6 +1,6 @@
 # Phase 4 实施计划：delete_pod 修复动作——补全自愈闭环
 
-> 落盘日期：2026-10-03 ｜ 状态：**进行中**
+> 落盘日期：2026-10-03 ｜ 状态：**✅ 已完成（2026-10-03 收官：cpu_overload 服务器实测全闭环——检出 592s / 诊断 CPUHigh / delete_pod 自动恢复 MTTR 89s，评估表已更新 docs/experiments.md）**
 > 里程碑：**评估表最后一格补齐**——cpu_overload 从"诊断正确但结构性无法修复"变成真正闭环，同时产出"破坏性动作的风险设计"这个面试故事（Phase 3 收官时 experiments.md §二 明确记录的能力缺口）
 
 ---
@@ -46,37 +46,37 @@ Phase 3 已收官（commit `93d26c5`）：三类实验服务器实测闭环，�
 
 ## 3. 后端改动
 
-- [ ] `agent/schemas.py`：`RemediationPlan.action` Literal 加 "delete_pod"；`target` 注释补"delete_pod 时为 Pod 名"
-- [ ] `risk_control/__init__.py`：`RISK_POLICY` 加 `delete_pod → (HIGH, REQUIRE_APPROVAL)`
-- [ ] `agent/tools/__init__.py`：`DeletePodParams`（空模型，注释说明目标由 plan.target 承载）+ `REMEDIATION_PARAM_MODELS` 注册；模块 docstring "4 个修复工具"→"5 个"
-- [ ] `risk_control/whitelist.py`：delete_pod 分支——`_delete_pod_violations(pod)`（存在性 + bare-pod-only 纯函数，便于冒烟打桩）；denied 审计 resource kind 按 action 区分 pod/deployment；docstring 规则补第 5 条
-- [ ] `agent/prompts.py`：`PROPOSE_SYSTEM` 加 delete_pod 适用条件（仅独立 Pod；受管工作负载用其它四类动作；target=Pod 名从 labels.pod/证据取得）
-- [ ] `models/__init__.py`：`action_valid` CheckConstraint 同步加 'delete_pod'
-- [ ] `alembic/versions/0004_delete_pod_action.py`：DROP/ADD CHECK（含 downgrade，注记降级前置条件）
-- [ ] `remediation/executor.py`：`execute()` 加 delete_pod 分支——Pod 快照（kind/name/phase/status/restarts/workload/node）先落库 → `clients.k8s.delete_namespaced_pod` → 审计（allowed→success/failure）；`rollback()` 对 delete_pod 短路返回 success=False("不可回滚")；模块 docstring 补语义
-- [ ] 冒烟：`smoke_stage1.py` 追加断言（decide/delete_pod 条目、DeletePodParams、schema 接受 delete_pod 且拒绝未注册值、bare-pod 白名单拒绝/放行）；三套全绿
+- [x] `agent/schemas.py`：`RemediationPlan.action` Literal 加 "delete_pod"；`target` 注释补"delete_pod 时为 Pod 名"
+- [x] `risk_control/__init__.py`：`RISK_POLICY` 加 `delete_pod → (HIGH, REQUIRE_APPROVAL)`
+- [x] `agent/tools/__init__.py`：`DeletePodParams`（空模型，注释说明目标由 plan.target 承载）+ `REMEDIATION_PARAM_MODELS` 注册；模块 docstring "4 个修复工具"→"5 个"
+- [x] `risk_control/whitelist.py`：delete_pod 分支——`_delete_pod_violations(pod)`（存在性 + bare-pod-only 纯函数，便于冒烟打桩）；denied 审计 resource kind 按 action 区分 pod/deployment；docstring 规则补第 5 条
+- [x] `agent/prompts.py`：`PROPOSE_SYSTEM` 加 delete_pod 适用条件（仅独立 Pod；受管工作负载用其它四类动作；target=Pod 名从 labels.pod/证据取得）
+- [x] `models/__init__.py`：`action_valid` CheckConstraint 同步加 'delete_pod'
+- [x] `alembic/versions/0004_delete_pod_action.py`：DROP/ADD CHECK（含 downgrade，注记降级前置条件）
+- [x] `remediation/executor.py`：`execute()` 加 delete_pod 分支——Pod 快照（kind/name/phase/status/restarts/workload/node）先落库 → `clients.k8s.delete_namespaced_pod` → 审计（allowed→success/failure）；`rollback()` 对 delete_pod 短路返回 success=False("不可回滚")；模块 docstring 补语义
+- [x] 冒烟：`smoke_stage1.py` 追加断言（decide/delete_pod 条目、DeletePodParams、schema 接受 delete_pod 且拒绝未注册值、bare-pod 白名单拒绝/放行）；三套全绿
 
 ## 4. 前端改动
 
-- [ ] `services/faults.ts`：`Remediation.action` union 加 'delete_pod'
-- [ ] `utils/format.ts`：`ACTION_LABELS` 加 `delete_pod: '删除异常 Pod'`（诊断页时间线/提案列表/确认框自动生效）
-- [ ] npm build 门禁通过（vue-tsc + vite build）
+- [x] `services/faults.ts`：`Remediation.action` union 加 'delete_pod'
+- [x] `utils/format.ts`：`ACTION_LABELS` 加 `delete_pod: '删除异常 Pod'`（诊断页时间线/提案列表/确认框自动生效）
+- [x] npm build 门禁通过（vue-tsc + vite build）
 
 ## 5. 提交拆分（后端 commit 前跑三套冒烟，前端 commit 前 npm build）
 
-1. [ ] `docs(phase4): phase4-plan.md 落盘`
-2. [ ] `feat(risk_control): delete_pod 契约与门控`（schemas/RISK_POLICY/参数模型/白名单/prompts/models CheckConstraint/0004 迁移/冒烟断言）
-3. [ ] `feat(executor): delete_pod 执行 + 前端标签`（executor 分支 + rollback 短路 + faults.ts/format.ts + npm build）
-4. [ ] `test+docs：验收 + 收官`（服务器部署后跑 phase3_check.py cpu_overload；experiments.md 评估表 cpu_overload 行改判 + 能力缺口章节改写；design.md §1.2/§2、architecture.md §6.5/§6.6/§7.2/§11.1 同步；README 勾选；phase4-plan 全勾 = 收官）
+1. [x] `docs(phase4): phase4-plan.md 落盘`（6e4d655）
+2. [x] `feat(risk_control): delete_pod 契约与门控`（89f0743，含 schemas/RISK_POLICY/参数模型/白名单/prompts/models CheckConstraint/0004 迁移/冒烟断言）
+3. [x] `feat(executor): delete_pod 执行 + 前端标签`（2beb36d，executor 分支 + rollback 短路 + faults.ts/format.ts + npm build）
+4. [x] `test+docs：验收 + 收官`（服务器部署后跑 phase3_check.py cpu_overload；experiments.md 评估表 cpu_overload 行改判 + 能力缺口章节改写；design.md §1.2/§2、architecture.md §6.5/§6.6/§7.2/§11.1 同步；README 勾选；phase4-plan 全勾 = 收官）
 
 ## 6. 服务器验收（我代跑，沿用 `backend/scripts/phase3_check.py`，零改动）
 
-- [ ] push → webhook 自动部署 → /health OK；部署日志确认 0004 迁移执行
-- [ ] `docker compose exec backend python scripts/phase3_check.py cpu_overload`：create → inject → 等关联事件（ContainerCPUHigh 结构性 T+10min）→ awaiting_approval 自动 approve（提案应为 delete_pod + HIGH/require_approval）→ executor 删压力 Pod → verify 窗口 → 事件 resolved → evaluator 收敛 finished
-- [ ] 断言：report 的 detected/diagnosed_correctly/auto_recovered 全 true；"压力 Pod 60s 内删除"收尾断言通过（本次由 Agent 而非 evaluator 先删）；audit_logs 有 delete_pod 的 allowed→success 链
-- [ ] compare 接口首次对 cpu_overload 出四指标双窗口曲线（事件 resolved 后 409 解除）
-- [ ] 评估表更新：experiments.md cpu_overload 行 auto_recovered ❌→✅ + 能力缺口章节改写为"Phase 4 已补齐"；summary 快照刷新
-- [ ] 文档同步（§5 第 4 条清单）= Phase 4 收官
+- [x] push → webhook 自动部署 → /health OK；`alembic_version=0004`、action CHECK 已含 'delete_pod'（库内约束名为 naming_convention 双层前缀的既有产物，0004 注记说明）
+- [x] `docker compose exec backend python scripts/phase3_check.py cpu_overload`（实验 #19，2026-10-03）：create → inject → 关联事件 #24（T+592s，ContainerCPUHigh）→ awaiting_approval 自动 approve（提案 #13：delete_pod demo/stress-cpu-19，HIGH/require_approval——**Agent 在新动作可用时自主选对了 delete_pod**）→ 删除 Pod（批准到删除完成 <1s）→ 事件 resolved（MTTR 89s，webhook resolve 通道先行、图内验证窗口幂等收尾）→ evaluator 收敛 finished
+- [x] 断言：detected/diagnosed_correctly/auto_recovered 全 true（latency=592s / CPUHigh 置信 0.72 / mttr=89s / false_action=false）；"压力 Pod 60s 内删除"收尾断言通过（本次由 Agent 先删，evaluator 收尾 404 容忍）；audit_logs 有 delete_pod 的 allowed(before, Pod 快照 workload=null)→success(after) 链
+- [x] compare 接口首次对 cpu_overload 出四指标双窗口曲线（故障窗 3 点/恢复窗 11 点）
+- [x] 评估表更新：experiments.md cpu_overload 行 auto_recovered ❌→✅（实验 #19）+ 能力缺口章节改写为"闭环之路"；summary 快照刷新（recovery_rate 0.8333，#13 缺口期如实计入分母）
+- [x] 文档同步（§5 第 4 条清单）= Phase 4 收官
 
 ## 7. 风险与预案
 
@@ -102,4 +102,7 @@ Phase 3 已收官（commit `93d26c5`）：三类实验服务器实测闭环，�
 
 | 日期 | 阶段/任务 | commit | 备注 |
 |---|---|---|---|
-| 2026-10-03 | 计划落盘（§0-§9） | 本次 | 代码锚点已核实：delete_namespaced_pod 已在位、verify 对 Pod 名 target 空匹配直通、ContainerCPUHigh 带 pod 标签、deploy.sh 自动跑迁移 |
+| 2026-10-03 | 计划落盘（§0-§9） | 6e4d655 | 代码锚点已核实：delete_namespaced_pod 已在位、verify 对 Pod 名 target 空匹配直通、ContainerCPUHigh 带 pod 标签、deploy.sh 自动跑迁移 |
+| 2026-10-03 | 契约与门控：schemas/RISK_POLICY/参数模型/白名单 bare-pod-only/prompts/0004 迁移/冒烟断言 | 89f0743 | 三套冒烟全绿（stage1 增第 10 项 delete_pod 边界断言）；本机 git 走 127.0.0.1:7890 代理未开机，push 时临时 `-c http.proxy=` 直连（不改全局配置） |
+| 2026-10-03 | executor delete_pod 分支（快照先落库再删）+ rollback 短路 + 前端标签 | 2beb36d | 三套冒烟复跑全绿；npm build（vue-tsc+vite）通过 |
+| 2026-10-03 | 服务器验收：0004 迁移生效 + cpu_overload 全闭环 + 收官文档 | 本次 | 实验 #19：检出 592s/诊断 CPUHigh(0.72)/delete_pod 恢复 MTTR 89s/无误操作；Agent 自主选对 delete_pod；审计 allowed→success 双条、快照 workload=null；compare 首次出曲线；发现并注记 0001 约束名双层前缀现象（migration 注记）；experiments.md/design/architecture/README 同步 = **Phase 4 收官** |

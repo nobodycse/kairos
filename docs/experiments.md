@@ -15,19 +15,20 @@
 | 告警链路 | Prometheus 规则 → Alertmanager（group_wait 10s）→ backend webhook → LangGraph 诊断 |
 | 验收脚本 | `docker compose exec backend python scripts/phase3_check.py <type>`（自动批准修复提案） |
 
-## 二、评估结果（2026-10-02 服务器实测）
+## 二、评估结果（2026-10-02 首轮实测；cpu_overload 于 2026-10-03 经 Phase 4 `delete_pod` 复测闭环）
 
 | 故障类型 | 实验次数 | 检出 | 检测延迟 | 诊断准确率 | 自动修复成功率 | 平均 MTTR | 误操作率 |
 |---|---|---|---|---|---|---|---|
 | oom | 1 | 1/1 | 28s | 1/1（根因判定 OOM） | 1/1 | 1980s* | 0 |
 | pod_crash | 1 | 1/1 | 148s | 1/1（根因判定 CrashLoop） | 1/1 | 540s | 0 |
-| cpu_overload | 1 | 1/1 | ~600s | 1/1（根因判定 ContainerCPUHigh） | 0/1 | - | 0 |
+| cpu_overload | 1 | 1/1 | 592s | 1/1（根因判定 CPUHigh，置信 0.72） | 1/1（delete_pod，Phase 4 补齐） | 89s | 0 |
 
 上表取每类故障的收官实验（里程碑口径）。验收过程的 12 行调参校准实验已应
-用户要求清理（关联事件保留、仅解除 experiment_id 外键），summary 收官快照：
-total_experiments=4（含 1 个未注入的创建态），overall
-diagnosis_accuracy=1.0 / recovery_rate=0.6667（cpu_overload 自动修复为
-能力缺口，见上节）/ avg_mttr_s=1260 / false_action_rate=0。
+用户要求清理（关联事件保留、仅解除 experiment_id 外键）；Phase 4 的
+cpu_overload 复测为实验 #19。summary 收官快照（2026-10-03，全量 7 行）：
+overall diagnosis_accuracy=1.0 / recovery_rate=0.8333（oom 4/4、pod_crash
+1/1、cpu_overload 2 次中 1 次——另 1 次为 Phase 3 能力缺口期的 #13，如实
+计入分母）/ avg_mttr_s=695.4 / false_action_rate=0。
 
 \* oom 的 MTTR 含验收时的人工批准等待（当时后端正滚动部署，确认延迟约 23 分钟为人
 为因素）；排除后，从注入到 Agent 产出方案约 2 分钟、执行+验证约 4 分钟。
@@ -38,19 +39,41 @@ diagnosis_accuracy=1.0 / recovery_rate=0.6667（cpu_overload 自动修复为
 |---|---|---|---|---|---|---|---|---|---|
 | #5 | pod_crash | 循环打崩 Pod（重启增量 ≥4 触发 PodCrashLooping） | #11 PodCrashLooping | ✅ | 148s | ✅ CrashLoop | ✅ | 540s | 否 |
 | #9 | oom | 调低 memory limit 512Mi→32Mi（requests 同调） | #15 PodOOMKilled | ✅ | 28s | ✅ OOM | ✅ | 1980s* | 否 |
-| #13 | cpu_overload | busybox 4×busy loop 压满 200m 配额（15 分钟自止） | #18 ContainerCPUHigh | ✅ | 608s | ✅ ContainerCPUHigh（置信 0.75） | ❌ | - | 否 |
+| #13 | cpu_overload | busybox 4×busy loop 压满 200m 配额（15 分钟自止） | #18 ContainerCPUHigh | ✅ | 608s | ✅ ContainerCPUHigh（置信 0.75） | ❌（动作集缺口，见下节） | - | 否 |
+| #19 | cpu_overload | 同 #13（busybox 4 loop 压 200m 配额） | #24 ContainerCPUHigh | ✅ | 592s | ✅ CPUHigh（置信 0.72） | ✅ delete_pod | 89s | 否 |
 
-### cpu_overload 自动修复失败的原因（能力缺口，如实记录）
+### cpu_overload 的闭环之路（Phase 3 缺口 → Phase 4 delete_pod 补齐）
 
-诊断正确（fault_type=ContainerCPUHigh，置信 0.75，根因精准指向压力容器），
-但 Agent 生成的修复提案指向 bare Pod——白名单要求目标是带
-`kairos.io/managed=true` 的 Deployment，而四类修复动作（调整限额/扩缩容/
-重启/回滚）没有一个适用于"删除流氓 Pod"这一正确修复，提案被门控拒绝
-（denied 审计留痕），事件转 failed 转人工。压力 Pod 15 分钟后自止、故障实际
-自愈，但事件已终态，不计入自动恢复。
+**Phase 3（#13，缺口如实记录）**：诊断正确（根因精准指向压力容器），但 Agent
+生成的修复提案指向 bare Pod——白名单要求目标是带 `kairos.io/managed=true`
+的 Deployment，而当时的四类修复动作（调整限额/扩缩容/重启/回滚）没有一个
+适用于"删除流氓 Pod"这一正确修复，提案被门控拒绝（denied 审计留痕），事件
+转 failed 转人工。压力 Pod 15 分钟后自止、故障实际自愈，但事件已终态，不计
+入自动恢复。
 
-**改进方向**（Phase 4+）：修复动作集增加 `delete_pod`（高风险、require_approval），
-或为压测类负载提供白名单豁免通道。
+**Phase 4（#19，闭环达成）**：修复动作集新增 `delete_pod`（HIGH /
+require_approval），安全边界=**只能删不属于任何工作负载的独立 Pod**
+（ownerReferences 无 Deployment/StatefulSet/DaemonSet；受管业务 Pod 一律
+拒绝 + denied 审计——Agent 永远不能删业务 Pod）；不可逆，rollback 语义为
+"不回滚、转人工"。服务器实测全链路：
+
+- 告警 T+592s firing → 事件 #24 → Agent 诊断（CPUHigh，置信 0.72，根因
+  指向 stress-cpu-19 压测容器）→ 提案 `delete_pod target=stress-cpu-19`
+  （HIGH/require_approval）→ 自动批准 → 白名单复核放行 → **Pod 快照
+  （phase/重启数/owner，workload=null）先落库 → 删除 Pod**（提案批准到
+  删除完成 <1s）→ 审计 allowed(before)+success(after) 双条留痕。
+- Pod 删除后 ContainerCPUHigh 快速回落，Alertmanager resolved 通知经
+  webhook 通道先行置事件 resolved（MTTR 89s）；图内验证窗口随后幂等收尾
+  （§2.4 设计内行为）。
+- `phase3_check.py cpu_overload` 全部断言通过（PHASE3 CHECK PASSED），
+  含"压力 Pod 60s 内删除"收尾检查——本次由 Agent 抢先完成，evaluator
+  收尾删除 404 容忍、双路径不冲突。
+- compare 首次对 cpu_overload 出四指标双窗口曲线（故障窗 3 点/恢复窗 11 点）。
+
+**风险设计要点（破坏性动作的防线）**：工具隔离（delete_pod 不进 LLM 工具
+列表）→ bare-pod-only 白名单（存在性 + workload 必须为 None）→
+HIGH/require_approval 人工确认 → 执行器快照先落库再删 → 全程审计 →
+不可回滚短路（验证不过不尝试"复活"，直接转人工）。
 
 ## 三、修复前后指标对比（compare 接口）
 
@@ -64,9 +87,10 @@ Prometheus 软依赖）。服务器实测：
 - **pod_crash（#5）**：CPU 故障窗 23 点、内存 25/4 点——被打崩 Pod 呈"崩溃
   归零-重启回升"锯齿；该窗口早于流量发生器上线，业务 5xx/P95 无数据，
   两副本冗余下单副本被打崩对业务无感。
-- **cpu_overload（#13）**：事件终态 failed（非 resolved），compare 按契约
-  返回 409——压力 Pod 的 CPU/限额比值 ≈1.0 曲线可经 Prometheus/Grafana
-  直接查看；待动作集补 `delete_pod` 使事件可恢复后即出对比曲线。
+- **cpu_overload（#19，Phase 4）**：事件 resolved 后 compare 契约解除 409，
+  四指标双窗口全有数据（故障窗 3 点/恢复窗 11 点）——故障窗 CPU 序列即
+  压力 Pod 的使用率/限额比值 ≈1.0，删除后恢复窗回归基线。#13（缺口期）
+  事件终态 failed，compare 按契约仍为 409。
 
 ## 四、验收过程发现并修复的问题（完整过程见 phase3-plan §9）
 

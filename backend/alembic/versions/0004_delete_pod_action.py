@@ -28,6 +28,12 @@ _OLD_EXPR = (
 )
 _CONSTRAINT = "ck_remediation_actions_action_valid"
 
+# 注记（服务器实测）：env.py 挂载 target_metadata=Base.metadata（含
+# NAMING_CONVENTION），op.drop_constraint/create_check_constraint 传入的显式名
+# 会被约定再包一层 → 库内实际名 ck_remediation_actions_ck_remediation_actions_
+# action_valid（双层前缀）。这是 0001 基线在 create_table 里用显式全名的既有
+# 产物；本迁移的 DROP/ADD 走同一约定展开，恰好命中同名约束，语义正确。
+
 
 def upgrade() -> None:
     op.drop_constraint(_CONSTRAINT, "remediation_actions", type_="check")

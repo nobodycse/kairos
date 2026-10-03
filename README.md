@@ -769,6 +769,7 @@ ai-k8s-ops/
 - [x] 自动回滚（按执行前快照恢复，Phase 2 阶段三交付）
 - [x] 多轮重新诊断（回滚后重入新线程，上限 2 次，Phase 2 阶段三交付）
 - [x] 故障处理记录（audit_logs 全量写操作 + 执行前后快照 diff）
+- [x] delete_pod 修复动作（独立 Pod 删除，bare-pod-only 白名单边界 + 不可回滚转人工，Phase 4 交付）
 
 ## Phase 7：故障实验室
 
@@ -782,7 +783,7 @@ ai-k8s-ops/
 
 - [x] 建立故障测试集（三类注入实验，Phase 3 交付）
 - [x] 测试诊断准确率（docs/experiments.md 评估表）
-- [x] 测试自动修复成功率（同上；cpu_overload 自动修复不可达为如实结论）
+- [x] 测试自动修复成功率（同上；cpu_overload 经 Phase 4 delete_pod 补齐后闭环）
 - [x] 测试 MTTR（同上）
 - [x] 测试误操作率（同上，remediation failed 审计口径）
 - [ ] 对比人工运维与 AI 运维效率

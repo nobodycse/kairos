@@ -59,7 +59,7 @@
 |---|---|
 | severity | `warning` `critical` |
 | risk_level | `low` `medium` `high` `critical` |
-| remediation action | `update_resource_limit` `scale_deployment` `restart_deployment` `rollback_deployment` |
+| remediation action | `update_resource_limit` `scale_deployment` `restart_deployment` `rollback_deployment` `delete_pod` |
 | policy | `auto` `require_approval` `forbidden` |
 | remediation status | `pending` `approved` `rejected` `executing` `succeeded` `failed` `rolled_back` |
 | evidence.source | `k8s_api` `prometheus` `loki` `events` |
@@ -140,7 +140,7 @@ CREATE TABLE remediation_actions (
     fault_event_id  BIGINT NOT NULL REFERENCES fault_events(id) ON DELETE CASCADE,
     action          TEXT NOT NULL CHECK (action IN
                       ('update_resource_limit','scale_deployment',
-                       'restart_deployment','rollback_deployment')),
+                       'restart_deployment','rollback_deployment','delete_pod')),
     namespace       TEXT NOT NULL,
     target          TEXT NOT NULL,
     params          JSONB NOT NULL DEFAULT '{}',
