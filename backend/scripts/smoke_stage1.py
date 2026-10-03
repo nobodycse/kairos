@@ -5,7 +5,7 @@
 
 覆盖：模块导入、OpenAI 工具规格、decide()、_extract_json 容错、修复参数
 schema、AgentState reducer 接线（含 MemorySaver 迷你图）、白名单幅度逻辑、
-quantity 解析。服务器端到端验收另见 stage1_check.py。
+delete_pod 白名单边界、quantity 解析。服务器端到端验收另见 stage1_check.py。
 """
 import operator
 import os
@@ -38,9 +38,11 @@ print(f"[1] to_openai_specs OK：8 个工具（{names[0]} ... {names[-1]}）")
 d = RC.decide("restart_deployment")
 assert d.risk_level == RC.RiskLevel.MEDIUM and d.policy == RC.Policy.REQUIRE_APPROVAL
 assert d.risk_level.value == "medium" and d.policy.value == "require_approval"
+dp = RC.decide("delete_pod")
+assert dp.risk_level == RC.RiskLevel.HIGH and dp.policy == RC.Policy.REQUIRE_APPROVAL
 assert RC.decide("delete_node").policy == RC.Policy.FORBIDDEN
 assert RC.decide("rm_rf_slash").risk_level == RC.RiskLevel.CRITICAL
-print("[2] decide() OK：已注册 / delete_node / 未注册默认拒绝")
+print("[2] decide() OK：已注册 / delete_pod=HIGH / delete_node / 未注册默认拒绝")
 
 # 3) _extract_json 容错
 f = L._extract_json
@@ -58,7 +60,8 @@ except Exception:
 r = T.UpdateResourceLimitParams.model_validate({"container": "app", "memory_limit": "1Gi"})
 assert r.cpu_limit is None
 assert T.RestartDeploymentParams().model_dump() == {}
-print("[4] REMEDIATION_PARAM_MODELS OK")
+assert T.DeletePodParams().model_dump() == {}
+print("[4] REMEDIATION_PARAM_MODELS OK（含 DeletePodParams）")
 
 # 5) Evidence / RCAReport / RemediationPlan 与 DB CHECK 对齐
 ev = S.Evidence(source="loki", tool="get_pod_logs", summary="x", data={"lines": []})
@@ -66,7 +69,14 @@ S.RCAReport(fault_type="OOM", root_cause="r", evidence=[ev], confidence=0.9,
             blast_radius="b", suggestion="s")
 S.RemediationPlan(action="update_resource_limit", namespace="demo", target="p",
                   params={"container": "app", "memory_limit": "2Gi"}, reason="why")
-print("[5] schemas OK")
+S.RemediationPlan(action="delete_pod", namespace="demo", target="stress-cpu-13",
+                  params={}, reason="压力 Pod 占满 CPU，删除止血")
+try:
+    S.RemediationPlan(action="delete_node", namespace="demo", target="n1", params={}, reason="x")
+    raise AssertionError("未注册动作应被 Literal 拒绝")
+except Exception:
+    pass
+print("[5] schemas OK（delete_pod 进 Literal、未注册值被拒）")
 
 # 6) AgentState reducer 接线（py3.14 PEP 649 下 get_type_hints 对 TypedDict 有坑，
 # 直接读 __annotations__；真实接线由第 7 项 langgraph 建图证明）
@@ -106,7 +116,7 @@ print("[7] StateGraph+MemorySaver OK：evidence 追加合并、checkpoint 可读
 
 # 8) 白名单调整幅度逻辑（纯函数）
 from agent.tools import UpdateResourceLimitParams  # noqa: E402
-from monitoring.models import DeploymentInfo  # noqa: E402
+from monitoring.models import DeploymentInfo, PodInfo  # noqa: E402
 
 dep = DeploymentInfo(
     namespace="demo", name="p", replicas=2, ready_replicas=2, image="i",
@@ -126,5 +136,21 @@ assert parse_quantity("512Mi") == 512 * 1024 * 1024
 assert parse_quantity("500m") == 0.5
 assert A.resource_for("deployment", "demo", "payment-service") == "deployment/demo/payment-service"
 print("[9] parse_quantity / resource_for OK")
+
+# 10) delete_pod 白名单边界（bare-pod-only 纯函数，Phase 4 核心安全防线）
+stress_pod = PodInfo(
+    namespace="demo", name="stress-cpu-13", workload=None, node="n1",
+    phase="Running", status="Running", ready=True, restarts=0, age_seconds=60,
+    memory_limit_bytes=128 * 1024 * 1024,
+)
+biz_pod = PodInfo(
+    namespace="demo", name="payment-service-7f9d8b", workload="payment-service", node="n1",
+    phase="Running", status="Running", ready=True, restarts=1, age_seconds=3600,
+    memory_limit_bytes=512 * 1024 * 1024,
+)
+assert W._delete_pod_violations(stress_pod) == [], "独立 Pod（无 owner）必须放行"
+assert W._delete_pod_violations(biz_pod), "受管工作负载 Pod 必须拒绝"
+assert W._delete_pod_violations(None), "目标 Pod 不存在必须拒绝"
+print("[10] delete_pod 白名单边界 OK：独立 Pod 放行 / 业务 Pod 拒绝 / 不存在拒绝")
 
 print("ALL SMOKE TESTS PASSED")

@@ -161,7 +161,7 @@ class RemediationAction(Base):
     __table_args__ = (
         CheckConstraint(
             "action IN ('update_resource_limit','scale_deployment',"
-            "'restart_deployment','rollback_deployment')",
+            "'restart_deployment','rollback_deployment','delete_pod')",
             name="action_valid",
         ),
         CheckConstraint(

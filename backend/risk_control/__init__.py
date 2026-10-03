@@ -28,6 +28,9 @@ RISK_POLICY: dict[str, tuple[RiskLevel, Policy]] = {
     "scale_deployment": (RiskLevel.MEDIUM, Policy.REQUIRE_APPROVAL),
     "restart_deployment": (RiskLevel.MEDIUM, Policy.REQUIRE_APPROVAL),
     "rollback_deployment": (RiskLevel.HIGH, Policy.REQUIRE_APPROVAL),
+    # delete_pod：不可逆（Pod 无法复活）但影响面是单 Pod——HIGH 档，低于
+    # delete_node 的 CRITICAL/FORBIDDEN；bare-pod-only 边界由白名单把守（§11.1）
+    "delete_pod": (RiskLevel.HIGH, Policy.REQUIRE_APPROVAL),
     "delete_node": (RiskLevel.CRITICAL, Policy.FORBIDDEN),
 }
 

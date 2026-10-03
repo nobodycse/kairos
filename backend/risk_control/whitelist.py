@@ -1,10 +1,13 @@
 """参数白名单（architecture.md §11.1）：LLM 提议 → 白名单校验 → decide()。
 
-四条规则（任一越界 → 拒绝 + 写审计 result=denied）：
+五条规则（任一越界 → 拒绝 + 写审计 result=denied）：
 1. namespace ∈ {settings.demo_namespace}（demo）
 2. scale_deployment.replicas ∈ [0, 10]
 3. update_resource_limit 只允许在当前值的 0.5x–4x 区间内调整
 4. 目标 workload 必须存在且带 kairos.io/managed=true 标签
+5. delete_pod 只允许删除独立 Pod（ownerReferences 无 Deployment/StatefulSet/
+   DaemonSet，即"流氓/压测 Pod"）——受管工作负载的 Pod 一律拒绝：Agent 永远
+   不能删业务 Pod
 
 demo 环境 workload 均为单容器，调整幅度对照 DeploymentInfo 首容器的
 cpu_limit/memory_limit（§6.5 params 示例口径一致）。
@@ -17,7 +20,7 @@ from agent.tools import REMEDIATION_PARAM_MODELS, UpdateResourceLimitParams
 from core.config import settings
 from monitoring import clients
 from monitoring.k8s import parse_quantity
-from monitoring.models import DeploymentInfo
+from monitoring.models import DeploymentInfo, PodInfo
 from risk_control.audit import resource_for, write_audit
 
 _MANAGED_LABEL = "kairos.io/managed"
@@ -61,11 +64,18 @@ async def validate(db: AsyncSession, plan: RemediationPlan) -> WhitelistResult:
             )
 
     dep: DeploymentInfo | None = None
+    pod: PodInfo | None = None
     if plan.namespace == settings.demo_namespace:
         # namespace 越界时不必查集群；这里 404 → None（目标不存在），基础设施异常向上抛
-        dep = await clients.k8s.get_deployment(plan.namespace, plan.target)
+        if plan.action == "delete_pod":
+            pod = await clients.k8s.get_pod(plan.namespace, plan.target)
+        else:
+            dep = await clients.k8s.get_deployment(plan.namespace, plan.target)
 
-    if dep is None:
+    if plan.action == "delete_pod":
+        # delete_pod 的 target 是 Pod 名而非 workload 名，走 bare-pod-only 校验
+        violations.extend(_delete_pod_violations(pod))
+    elif dep is None:
         violations.append(f"目标 workload {plan.namespace}/{plan.target} 不存在")
     else:
         managed = (dep.labels or {}).get(_MANAGED_LABEL)
@@ -82,12 +92,34 @@ async def validate(db: AsyncSession, plan: RemediationPlan) -> WhitelistResult:
             db,
             actor="agent",
             action=plan.action,
-            resource=resource_for("deployment", plan.namespace, plan.target),
+            resource=resource_for(
+                "pod" if plan.action == "delete_pod" else "deployment",
+                plan.namespace, plan.target,
+            ),
             params=plan.params,
             result="denied",
             detail={"violations": violations, "plan_reason": plan.reason},
         )
     return result
+
+
+def _delete_pod_violations(pod: PodInfo | None) -> list[str]:
+    """delete_pod 白名单校验（存在性 + bare-pod-only，规则 5）。
+
+    pod.workload 由 ownerReferences 推导：Deployment（直属/经 RS）与
+    StatefulSet/DaemonSet → 名字，无 owner 与 Job → None。workload 非 None
+    即受管工作负载，一律拒绝——Agent 永远不能删业务 Pod（Phase 4 核心
+    安全边界）；None 视为独立 Pod 放行（demo ns 压测/流氓 Pod 场景，
+    Job 属派生 None 的既有口径，demo ns 无 Job 负载）。纯函数便于冒烟打桩。
+    """
+    if pod is None:
+        return ["目标 Pod 不存在（可能已被删除或名字有误）"]
+    if pod.workload is not None:
+        return [
+            f"Pod {pod.namespace}/{pod.name} 属于受管工作负载 {pod.workload}，"
+            "不允许删除（Agent 只能删独立 Pod；业务 Pod 请用其它修复动作）"
+        ]
+    return []
 
 
 def _limit_ratio_violations(

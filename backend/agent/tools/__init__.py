@@ -1,6 +1,6 @@
 """Agent 工具层（architecture.md §7.2）。
 
-8 个查询工具注册给 LLM function calling；4 个修复工具只有参数 schema
+8 个查询工具注册给 LLM function calling；5 个修复工具只有参数 schema
 （REMEDIATION_PARAM_MODELS），**不进 LLM 工具列表**——LLM 不持有写权限，
 修复动作只能由 propose_fix 结构化提议、经 risk_gate/executor 执行。
 每个查询工具返回 Evidence（§6.4），data 截断：日志 200 行、指标 60 点（§7.3）。
@@ -338,9 +338,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Evidence:
         raise ToolError(f"{name} 执行失败：{type(e).__name__}: {e}") from e
 
 
-# ---------- 4 个修复工具的参数 schema（§7.2 工具隔离：不进 LLM 工具列表） ----------
-# 只定义参数形态；业务约束（replicas∈[0,10]、limit 0.5x–4x、managed 标签）由
-# risk_control.whitelist 统一裁决（§11.1 单一权威）。
+# ---------- 5 个修复工具的参数 schema（§7.2 工具隔离：不进 LLM 工具列表） ----------
+# 只定义参数形态；业务约束（replicas∈[0,10]、limit 0.5x–4x、managed 标签、
+# delete_pod 仅限独立 Pod）由 risk_control.whitelist 统一裁决（§11.1 单一权威）。
 
 
 class UpdateResourceLimitParams(BaseModel):
@@ -361,9 +361,16 @@ class RollbackDeploymentParams(BaseModel):
     pass
 
 
+class DeletePodParams(BaseModel):
+    """delete_pod 无参数：目标 Pod 名由 RemediationPlan.target 承载。"""
+
+    pass
+
+
 REMEDIATION_PARAM_MODELS: dict[str, type[BaseModel]] = {
     "update_resource_limit": UpdateResourceLimitParams,
     "scale_deployment": ScaleDeploymentParams,
     "restart_deployment": RestartDeploymentParams,
     "rollback_deployment": RollbackDeploymentParams,
+    "delete_pod": DeletePodParams,
 }

@@ -42,9 +42,9 @@ class RemediationPlan(BaseModel):
 
     action: Literal[
         "update_resource_limit", "scale_deployment",
-        "restart_deployment", "rollback_deployment",
+        "restart_deployment", "rollback_deployment", "delete_pod",
     ]
     namespace: str
-    target: str  # workload 名（Deployment）
+    target: str  # workload 名（Deployment）；delete_pod 时为 Pod 名
     params: dict[str, Any]  # 如 {"container": "app", "memory_limit": "1Gi"}
     reason: str
