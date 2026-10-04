@@ -727,7 +727,7 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 |---|---|
 | POSTGRES_PASSWORD | 数据库密码（与 DATABASE_URL 保持一致） |
 | GRAFANA_ADMIN_PASSWORD | Grafana 管理员密码 |
-| WEBHOOK_SECRET | Gitee webhook HMAC 校验密钥 |
+| WEBHOOK_SECRET | Git 托管平台（Gitee/GitHub）webhook 校验密钥 |
 | K3S_SERVER_IP | 宿主机内网 IP，用于改写 k3s.yaml 的 server 地址 |
 | ADMIN_INITIAL_PASSWORD | 初始 admin 密码（Alembic 种子迁移用，必须覆盖） |
 

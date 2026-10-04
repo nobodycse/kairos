@@ -1,5 +1,5 @@
 [Unit]
-Description=KAIROS Gitee WebHook receiver (deploy trigger)
+Description=KAIROS Git WebHook receiver (Gitee/GitHub, deploy trigger)
 After=network-online.target
 Wants=network-online.target
 

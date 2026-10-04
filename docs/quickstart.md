@@ -29,7 +29,7 @@
 ### 第 1 步：克隆仓库
 
 ```bash
-git clone https://gitee.com/nobodycse/kairos.git && cd KAIROS
+git clone https://github.com/nobodycse/kairos.git && cd KAIROS
 ```
 
 ### 第 2 步：生成并填写配置
@@ -105,8 +105,9 @@ KAIROS 文件夹下三块看板：**被监控集群 · 集群层（K8s）**（�
 
 ## 6. 代码更新后怎么重新部署
 
-- **Gitee 自动部署（默认）**：`.env` 的 `WEBHOOK_SECRET` 填到 Gitee 仓库的 WebHook（URL `http://<服务器IP>:9000/webhook`，密码同值），之后 push main 分支即自动构建部署，失败自动回滚上一版本；
-- **GitHub / 手动**：在服务器上 `cd /opt/kairos/repo && git pull && bash scripts/deploy.sh`。
+- **GitHub 自动部署（默认）**：仓库 Settings → Webhooks → 添加：Payload URL `http://<服务器IP>:9000/deploy`、Content-Type `application/json`、Secret 与 `.env` 的 `WEBHOOK_SECRET` 一致、触发事件仅 push——之后 push main 分支即自动构建部署，失败自动回滚上一版本；
+- **手动**：在服务器上 `cd /opt/kairos/repo && git pull && bash scripts/deploy.sh`；
+- 部署接收器对 Gitee（`X-Gitee-Token`）与 GitHub（`X-Hub-Signature-256`）两种签名**双兼容**，用 Gitee 托管的用户按 Gitee WebHook「密码」方式配置即可。
 
 ## 7. 常见问题（FAQ）
 

@@ -166,7 +166,7 @@ systemctl enable --now kairos-webhook
 if command -v ufw >/dev/null; then
   ufw allow 22/tcp || true
   ufw allow 80/tcp || true
-  ufw allow 9000/tcp || true   # 建议在云安全组进一步限制来源为 Gitee IP 段
+  ufw allow 9000/tcp || true   # 建议在云安全组进一步限制来源为 GitHub/Gitee IP 段
 fi
 
 log "完成。后续推送 main 分支即自动部署（journalctl -u kairos-webhook -f 查看部署日志）"

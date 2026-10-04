@@ -7,7 +7,7 @@
 一台 Ubuntu 22.04 服务器（推荐 4核8G）+ 一个大模型 API Key，三步跑起来：
 
 ```bash
-git clone https://gitee.com/nobodycse/kairos.git && cd KAIROS
+git clone https://github.com/nobodycse/kairos.git && cd KAIROS
 cp deploy/compose/.env.example deploy/compose/.env    # 填写其中 CHANGE_ME 项（AI Key 与各密码）
 sudo bash scripts/setup_server.sh                     # 一键初始化：Docker + k3s + 监控栈 + 演示应用
 ```

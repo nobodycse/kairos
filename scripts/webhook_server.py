@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""KAIROS Gitee WebHook 接收器（Python 标准库，无第三方依赖）。
+"""KAIROS Git WebHook 接收器（Python 标准库，无第三方依赖）。
 
 - 监听 :9000，systemd 常驻（kairos-webhook.service），日志走 journald
-- 校验 X-Gitee-Token：Gitee 的 WebHook「密码」以明文放请求头（Gitee 机制如此，
-  非 GitHub 式 HMAC 签名）；同时兼容 X-Hub-Signature-256 以备换托管平台
+- 双平台签名兼容：Gitee 校验 X-Gitee-Token（Gitee 的 WebHook「密码」以明文放
+  请求头，非 HMAC）；GitHub 校验 X-Hub-Signature-256（HMAC-SHA256 over raw body）
 - 仅处理 main 分支 push；并发部署以进程内锁 + deploy.sh 的 flock 串行
-- Gitee 等待响应超时很短，先应答 202 再后台执行 deploy.sh
+- 托管平台等待响应超时很短，先应答 202 再后台执行 deploy.sh
 """
 import hashlib
 import hmac
@@ -28,7 +28,7 @@ _deploy_lock = threading.Lock()
 
 
 def _verify(headers, body: bytes) -> bool:
-    """Gitee：X-Gitee-Token 等于密钥；GitHub 兼容：X-Hub-Signature-256 HMAC-SHA256。"""
+    """GitHub：X-Hub-Signature-256 = HMAC-SHA256；Gitee：X-Gitee-Token 明文密钥。"""
     if not WEBHOOK_SECRET:
         return False
     token = headers.get("X-Gitee-Token")

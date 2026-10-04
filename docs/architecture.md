@@ -152,7 +152,7 @@ flowchart TB
     USER["浏览器"] -->|"80 仅对外开放"| NGINX
     NGINX -->|"/api"| BE
     NGINX -->|"/grafana"| GRAF2
-    GITEE["Gitee webhook"] -->|"9000 + 签名校验"| WH
+    GIT["Git 托管平台 webhook"] -->|"9000 + 签名校验"| WH
     WH --> DEPLOY
     BE -->|"挂载 k3s.yaml"| K3S
     PROM2 -->|"抓取"| K3S
@@ -163,7 +163,7 @@ flowchart TB
 要点：
 
 - **webhook 常驻方式**：`webhook_server.py` 以 systemd（`kairos-webhook.service`）常驻宿主机，**不在平台层 compose 内**——deploy.sh `up -d` 重启平台层期间 webhook 自身不受影响；密钥经 `EnvironmentFile` 读 `deploy/compose/.env`，日志走 journald。
-- **网络边界**：公网只开 `22 / 80 / 9000`（9000 建议在云安全组限制 Gitee 来源 IP）。Prometheus、Loki、PostgreSQL、Redis、backend 全部只在 compose 内网/本机，需要看 Grafana 走 nginx 反代，需要查监控数据走 SSH 隧道。
+- **网络边界**：公网只开 `22 / 80 / 9000`（9000 建议在云安全组限制 Git 托管平台来源 IP）。Prometheus、Loki、PostgreSQL、Redis、backend 全部只在 compose 内网/本机，需要看 Grafana 走 nginx 反代，需要查监控数据走 SSH 隧道。
 - **backend 连集群**：backend 跑在 compose（集群外），部署时挂载宿主机 `/etc/rancher/k3s/k3s.yaml` 到容器并设置 `KUBECONFIG`，启动脚本把其中 `server: https://127.0.0.1:6443` 改写为 `https://<宿主机内网IP>:6443`（容器内 127.0.0.1 不通）。
 - **双 compose 拆分**：平台层与可观测栈独立启停互不牵连；低配机器（2C4G 降级）可以只跑平台层，监控栈最小化。
 - **服务器目录约定**：
@@ -567,7 +567,7 @@ LLM 提议 → 参数白名单校验 → risk_control.decide() → (人工确认
 
 ### 11.2 其他安全项
 
-- Alertmanager/webhook 端点只在内网监听；Gitee webhook 走 HMAC 签名校验（§3）。
+- Alertmanager/webhook 端点只在内网监听；Git 托管平台（Gitee/GitHub）webhook 走签名/token 校验（`scripts/webhook_server.py` 双兼容，§3）。
 - JWT 单管理员登录，密钥在 `.env`；前端仅做展示层鉴权，所有接口后端强制校验。
 - LLM API key、数据库密码全走 `.env`，不入库不入镜像。
 

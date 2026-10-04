@@ -26,9 +26,9 @@
 |---|---|---|
 | 22 | 全部（或你的 IP） | SSH |
 | 80 | 全部 | 网站 |
-| 9000 | **建议限制为 Gitee IP 段** | Gitee WebHook 部署触发 |
+| 9000 | **建议限制为 GitHub/Gitee IP 段** | Git 平台 WebHook 部署触发 |
 
-不开 9000，push 后 Gitee 的 webhook 会一直超时重试——这是最常见的"脚本明明跑成功了却不自动部署"的原因。
+不开 9000，push 后平台的 webhook 会一直超时重试——这是最常见的"脚本明明跑成功了却不自动部署"的原因。
 
 ### 1.2 登录与基础检查
 
@@ -43,10 +43,10 @@ curl -m 5 https://get.k3s.io -o /dev/null -w '%{http_code}\n'   # 期望 200，�
 
 ## 2. 一键脚本
 
-### 2.1 克隆仓库（私有仓库会提示输入 Gitee 账号密码/令牌）
+### 2.1 克隆仓库（私有仓库会提示输入 GitHub 账号/PAT 令牌）
 
 ```bash
-git clone https://gitee.com/<你的用户名>/KAIROS.git /opt/kairos/repo
+git clone https://github.com/<你的用户名>/kairos.git /opt/kairos/repo
 # 或先 clone 到任意目录，脚本检测后自动克隆到 /opt/kairos/repo
 ```
 
@@ -79,7 +79,7 @@ sudo bash scripts/setup_server.sh
 | `POSTGRES_PASSWORD` | 随机串，`openssl rand -hex 16` |
 | `JWT_SECRET` | 随机 32+ 字符，`openssl rand -hex 32` |
 | `GRAFANA_ADMIN_PASSWORD` | 你自己的 Grafana 密码 |
-| `WEBHOOK_SECRET` | 随机串——**下一步 Gitee 要填同一个值** |
+| `WEBHOOK_SECRET` | 随机串——**下一步平台 WebHook 要填同一个值** |
 | `ADMIN_INITIAL_PASSWORD` | 初始 admin 账号密码（首次部署跑迁移时创建用户） |
 | `LLM_API_KEY` | DeepSeek 等 API Key（Phase 2 才用，可先填占位） |
 | 其余（`DATABASE_URL`/`REDIS_URL`/`KUBECONFIG`/`K3S_SERVER_IP`） | 保持默认，不用动 |
@@ -91,10 +91,10 @@ cd /opt/kairos/repo/deploy/compose
 docker compose -f docker-compose.yml up -d --force-recreate backend
 ```
 
-**② 配 Gitee WebHook**：仓库 → 管理 → WebHooks → 添加
+**② 配 WebHook（GitHub：Settings → Webhooks → Add webhook；Gitee：仓库管理 → WebHooks → 添加）**
 
 - URL：`http://<公网IP>:9000/deploy`
-- 密码：与 `.env` 的 `WEBHOOK_SECRET` 一致
+- Secret/密码：与 `.env` 的 `WEBHOOK_SECRET` 一致（GitHub 需选 Content-Type `application/json`）
 - 事件：仅 Push；点击"测试"应返回 202
 
 **③ 验证 systemd 服务**：
@@ -134,8 +134,8 @@ ssh -L 3000:127.0.0.1:3000 root@<公网IP>
 
 | 症状 | 先查 |
 |---|---|
-| push 后无任何反应 | 控制台防火墙 9000 是否放行；Gitee webhook 测试返回什么；`systemctl status kairos-webhook` |
-| webhook 日志 401 | `.env` 的 `WEBHOOK_SECRET` 与 Gitee 填的密码不一致 |
+| push 后无任何反应 | 控制台防火墙 9000 是否放行；平台 webhook 测试返回什么；`systemctl status kairos-webhook` |
+| webhook 日志 401 | `.env` 的 `WEBHOOK_SECRET` 与平台填的 Secret 不一致 |
 | 部署日志报 CHANGE_ME 警告 | §2.3-① 没做完，改 .env 后 recreate backend |
 | 页面 502/健康检查失败自动回退 | `deploy.sh` 会自动退回上一版本并保留日志（`docker compose logs backend`），修好后再 push 即可——**线上不会因此长期挂掉** |
 | 镜像拉取失败 | 国内网络问题，监控镜像可改用 `docker.m.daocloud.io` 前缀（本地已验证可行）；kube-state-metrics 可换 bitnami 源（见 deploy/kubernetes/README.md） |
