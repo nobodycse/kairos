@@ -34,7 +34,7 @@ Phase 3 已收官（commit `93d26c5`）：三类实验服务器实测闭环，�
 - `api/routers/faults.py` L193 approve 接口 + `phase3_check.py` `approve_pending`：自动批准任意 pending 提案，action 无关——**验收脚本无需改动**。
 - `scripts/deploy.sh` L40：部署时 `alembic upgrade head` 自动执行——0004 迁移 push 后即生效。
 - 前端：`services/faults.ts` L65 action union 四值；`utils/format.ts` L67 `ACTION_LABELS` 四条；诊断页确认框显示 `namespace/target`（对 Pod 名同样适用）。
-- 服务器：`root@123.206.194.192`（/opt/kairos/repo，Gitee webhook → deploy.sh 自动部署），SSH 密钥可用，验收我代跑。
+- 服务器：（/opt/kairos/repo，Gitee webhook → deploy.sh 自动部署，SSH 可达，验收由我代跑。
 
 ## 2. 关键设计决策（文档留白处的落地口径）
 

@@ -48,6 +48,7 @@ vi deploy/compose/.env
 | `JWT_SECRET` | 随机 32+ 字符：`openssl rand -hex 32` |
 | `POSTGRES_PASSWORD` | 数据库密码：`openssl rand -hex 16` |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana 监控看板的登录密码 |
+| `GRAFANA_ROOT_URL` | Grafana 的浏览器访问地址：SSH 隧道/本机访问保持默认；**公网部署改为 `http://<你的服务器IP>/grafana`**，否则看板页面会跳转到错误地址 |
 | `WEBHOOK_SECRET` | 自动部署 webhook 的校验口令：`openssl rand -hex 16` |
 
 `LLM_BASE_URL` / `LLM_MODEL` 按你的供应商改（默认 DeepSeek）。`K3S_SERVER_IP` 保持模板值即可，脚本会自动探测本机 IP 回填。

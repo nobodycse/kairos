@@ -46,10 +46,10 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       # 子路径部署（nginx 反代 /grafana，见 deploy/docker/nginx.conf）。
-      # root_url 必须硬编码公网地址：%(domain)s 未设置默认 localhost，
-      # %(http_port)s 是容器内监听端口 3000——拼出的 localhost:3000 会把
-      # 浏览器 301 到本机（2026-10-04 实测修复）。换域名/公网入口时同步改此项
-      GF_SERVER_ROOT_URL: "http://123.206.194.192/grafana"
+      # root_url 必须与浏览器实际访问的公网地址一致，经 .env 的 GRAFANA_ROOT_URL
+      # 配置（默认适配 SSH 隧道/本机访问；公网部署必须改成 http://<服务器IP>/grafana，
+      # 否则 UI 会被 301 到错误地址——2026-10-04 实测修复）
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000/grafana}"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - /opt/kairos/data/grafana:/var/lib/grafana

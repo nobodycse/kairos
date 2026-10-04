@@ -28,7 +28,7 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 - `backend/agent/runner.py`：`_spawn`（持引用防 GC）+ `recover_orphans` 是监听任务与启动恢复的先例写法。
 - demo-app：容器名 `app`、端口 8000、`POST /internal/crash` 在位（demo-app/app.py L60）；payment-service replicas 2 / limits 512Mi / `kairos.io/managed=true`（deploy/kubernetes/demo-app.yaml）。
 - 前端：LabView.vue / HistoryView.vue 均为 Phase 0 占位（各有"Phase 0/3 补充"告警条）；services/experiments.ts、reports.ts 类型已备；FaultListView 30s 轮询 + EChart.vue 封装（DashboardView 有用例）为先例。
-- 服务器：`root@123.206.194.192`（/opt/kairos/repo，Gitee webhook → deploy.sh 自动部署），SSH 密钥可用，**验收我代跑**。
+- 服务器：（/opt/kairos/repo，Gitee webhook → deploy.sh 自动部署，SSH 可达，**验收由我代跑**。
 
 ## 2. 关键设计决策（文档留白处的落地口径）
 
@@ -115,7 +115,7 @@ Phase 2 已收官（commit `42703c0`）：真实告警链路全闭环（Promethe
 
 | 日期 | 阶段/任务 | commit | 备注 |
 |---|---|---|---|
-| 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（123.206.194.192） |
+| 2026-10-01 | 计划落盘（§0-§9） | 19242a0 | 代码锚点已核实；服务器 SSH 可达（<SERVER_IP>） |
 | 2026-10-01 | faultlab 模块（注入器/评估器/互斥/还原/恢复）+ monitoring 加法改动 | fd9b34f | 评估器随模块一并入库（API 接线在下一 commit）；三套冒烟全绿；Mimosa ORM 写法规律实测记入 §8 |
 | 2026-10-01 | experiments/reports 接真 DB + compare + 删 mock.py + 契约文档 | c6a785a | design §3.11.1/§3.11.2 + architecture §12 补两行；phase3_check.py 入库 |
 | 2026-10-01 | 前端：LabView 重做 + HistoryView 图表 + services 封装 | f76fc8e | npm build（vue-tsc+vite）通过；compare 仅 auto_recovered 后拉取 |
