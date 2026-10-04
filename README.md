@@ -2,6 +2,20 @@
 
 > 基于 Kubernetes、Prometheus、Loki 与大语言模型构建的云原生 AIOps 系统，实现 **故障发现 → 多源信息采集 → AI 根因分析 → 风险评估 → 自动修复 → 修复验证 → 回滚** 的智能运维闭环。
 
+## 🚀 快速开始
+
+一台 Ubuntu 22.04 服务器（推荐 4核8G）+ 一个大模型 API Key，三步跑起来：
+
+```bash
+git clone https://gitee.com/nobodycse/kairos.git && cd KAIROS
+cp deploy/compose/.env.example deploy/compose/.env    # 填写其中 CHANGE_ME 项（AI Key 与各密码）
+sudo bash scripts/setup_server.sh                     # 一键初始化：Docker + k3s + 监控栈 + 演示应用
+```
+
+完成后浏览器打开 `http://<服务器IP>/`（账号 `admin`，密码为 `.env` 中的 `ADMIN_INITIAL_PASSWORD`），
+跟着 **[docs/quickstart.md](docs/quickstart.md)** 的「10 分钟导览」注入第一个故障，看 AI 自动完成诊断与修复。
+监控看板在 `http://<服务器IP>/grafana`。接入已有 Kubernetes 集群、FAQ 与安全清单见同一文档。
+
 ---
 
 ## 📖 项目简介
