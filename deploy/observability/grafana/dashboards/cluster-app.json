@@ -9,6 +9,30 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "builtIn": 0,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertstate=\"firing\",alertname=~\"HTTPErrorRateHigh|HTTPLatencyHigh\"} unless ALERTS{alertstate=\"firing\",alertname=~\"HTTPErrorRateHigh|HTTPLatencyHigh\"} offset 1m",
+        "hide": false,
+        "iconColor": "red",
+        "name": "告警触发",
+        "step": "15s",
+        "tagKeys": "alertname",
+        "titleFormat": "告警触发：{{alertname}}"
+      },
+      {
+        "builtIn": 0,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertstate=\"firing\",alertname=~\"HTTPErrorRateHigh|HTTPLatencyHigh\"} offset 1m unless ALERTS{alertstate=\"firing\",alertname=~\"HTTPErrorRateHigh|HTTPLatencyHigh\"}",
+        "hide": false,
+        "iconColor": "green",
+        "name": "告警恢复",
+        "step": "15s",
+        "tagKeys": "alertname",
+        "titleFormat": "告警恢复：{{alertname}}"
       }
     ]
   },

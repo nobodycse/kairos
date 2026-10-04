@@ -753,7 +753,7 @@ graph 运行至 `risk_gate → REQUIRE_APPROVAL` 时调用 `interrupt()`；后�
 
 ### 8.2 前端无后端依赖的先行任务
 
-等待契约/联调的空档做：Grafana 两组看板 JSON（被监控集群 / KAIROS 自身）、demo-app 展示页（如需要）、最终 Demo 演示脚本与验收清单。
+等待契约/联调的空档做：Grafana 两组看板 JSON（被监控集群 / KAIROS 自身）、demo-app 展示页（如需要）、最终 Demo 演示脚本与验收清单。（进度注记：看板 JSON 已于 Phase 2 先行交付，2026-10-04 演示化——cluster-app/cluster-k8s 增加告警触发/恢复自动注解（ALERTS firing 起止检测），refresh/time 调为演示友好默认；演示脚本与验收清单为收官后可选项，暂缓）
 
 ### 8.3 协作约定
 

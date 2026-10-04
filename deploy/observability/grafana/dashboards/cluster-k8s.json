@@ -9,6 +9,32 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "builtIn": 0,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertstate=\"firing\",alertname=~\"PodCrashLooping|PodOOMKilled|ContainerMemoryHigh|ContainerCPUHigh|NodeNotReady\"} unless ALERTS{alertstate=\"firing\",alertname=~\"PodCrashLooping|PodOOMKilled|ContainerMemoryHigh|ContainerCPUHigh|NodeNotReady\"} offset 1m",
+        "hide": false,
+        "iconColor": "red",
+        "name": "告警触发",
+        "step": "15s",
+        "tagKeys": "alertname",
+        "textFormat": "{{pod}}",
+        "titleFormat": "告警触发：{{alertname}}"
+      },
+      {
+        "builtIn": 0,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertstate=\"firing\",alertname=~\"PodCrashLooping|PodOOMKilled|ContainerMemoryHigh|ContainerCPUHigh|NodeNotReady\"} offset 1m unless ALERTS{alertstate=\"firing\",alertname=~\"PodCrashLooping|PodOOMKilled|ContainerMemoryHigh|ContainerCPUHigh|NodeNotReady\"}",
+        "hide": false,
+        "iconColor": "green",
+        "name": "告警恢复",
+        "step": "15s",
+        "tagKeys": "alertname",
+        "textFormat": "{{pod}}",
+        "titleFormat": "告警恢复：{{alertname}}"
       }
     ]
   },
@@ -379,11 +405,11 @@
       "type": "timeseries"
     }
   ],
-  "refresh": "30s",
+  "refresh": "10s",
   "schemaVersion": 39,
   "tags": ["kairos", "k8s"],
   "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
+  "time": { "from": "now-30m", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "被监控集群 · 集群层（K8s）",
