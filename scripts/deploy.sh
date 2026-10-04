@@ -17,7 +17,16 @@ flock -n 9 || { log "已有部署在进行，退出"; exit 0; }
 
 cd "$REPO_DIR"
 REMOTE=$(git remote get-url gitee >/dev/null 2>&1 && echo gitee || echo origin)
-git fetch "$REMOTE" main
+# GitHub 直连在国内服务器上偶发 SSL 超时（2026-10-04 实测）：失败重试，共 3 次
+for i in 1 2 3; do
+  if git fetch "$REMOTE" main; then break; fi
+  if [[ $i == 3 ]]; then
+    log "git fetch 三次均失败，放弃本次部署（下一次 push 会再次触发）"
+    exit 1
+  fi
+  log "git fetch 失败（第 $i 次），10s 后重试"
+  sleep 10
+done
 git reset --hard "$REMOTE"/main
 
 NEW_TAG=$(git rev-parse --short HEAD)
