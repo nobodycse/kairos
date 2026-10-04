@@ -2,7 +2,8 @@
 # 与平台层（docker-compose.yml）独立启停，共用 external 网络 kairos-net：
 #   - alertmanager → backend:8000 推告警 webhook
 #   - frontend nginx → grafana:3000 反代
-# 所有端口只绑宿主机回环（architecture.md §3 网络边界），查监控走 SSH 隧道
+# 所有端口只绑宿主机回环（architecture.md §3 网络边界），查监控走公网
+# http://<服务器>/grafana（frontend nginx 反代）
 name: kairos-monitor
 
 networks:
@@ -44,8 +45,11 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      # 子路径部署（nginx 反代 /grafana，见 deploy/docker/nginx.conf）
-      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/grafana"
+      # 子路径部署（nginx 反代 /grafana，见 deploy/docker/nginx.conf）。
+      # root_url 必须硬编码公网地址：%(domain)s 未设置默认 localhost，
+      # %(http_port)s 是容器内监听端口 3000——拼出的 localhost:3000 会把
+      # 浏览器 301 到本机（2026-10-04 实测修复）。换域名/公网入口时同步改此项
+      GF_SERVER_ROOT_URL: "http://123.206.194.192/grafana"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - /opt/kairos/data/grafana:/var/lib/grafana
